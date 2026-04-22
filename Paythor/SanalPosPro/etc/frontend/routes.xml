@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * File: app/code/Paythor/SanalPosPro/etc/frontend/routes.xml
+ *
+ * Registers the "paythor" frontName so the following URLs resolve:
+ *   /paythor/payment/create   -> Controller\Payment\Create
+ *   /paythor/payment/callback -> Controller\Payment\Callback
+ *   /paythor/webhook/notify   -> Controller\Webhook\Notify
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:App/etc/routes.xsd">
+    <router id="standard">
+        <route id="paythor" frontName="paythor">
+            <module name="Paythor_SanalPosPro"/>
+        </route>
+    </router>
+</config>

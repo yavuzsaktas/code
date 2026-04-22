@@ -1,0 +1,120 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * File: app/code/Paythor/SanalPosPro/etc/adminhtml/system.xml
+ *
+ * Admin configuration screen:
+ *   Stores > Configuration > Sales > Payment Methods > Paythor SanalPos Pro
+ *
+ * - api_secret + webhook_secret use the "obscured" Encrypted backend model
+ *   so values are stored AES-encrypted in core_config_data.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Config:etc/system_file.xsd">
+    <system>
+        <section id="payment">
+            <group id="paythor_sanalpospro"
+                   translate="label comment"
+                   type="text"
+                   sortOrder="100"
+                   showInDefault="1"
+                   showInWebsite="1"
+                   showInStore="1">
+                <label>Paythor SanalPos Pro</label>
+                <comment><![CDATA[Custom hybrid iframe payment integration. Webhook URL: <code>{base_url}paythor/webhook/notify</code>]]></comment>
+                <fieldset_css>complex paythor-sanalpospro-section</fieldset_css>
+
+                <field id="active" translate="label" type="select" sortOrder="10"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Enabled</label>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <config_path>payment/paythor_sanalpospro/active</config_path>
+                </field>
+
+                <field id="title" translate="label" type="text" sortOrder="20"
+                       showInDefault="1" showInWebsite="1" showInStore="1">
+                    <label>Title</label>
+                    <config_path>payment/paythor_sanalpospro/title</config_path>
+                </field>
+
+                <field id="sandbox_mode" translate="label comment" type="select" sortOrder="30"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Sandbox Mode</label>
+                    <comment>Use Paythor sandbox endpoint for testing.</comment>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <config_path>payment/paythor_sanalpospro/sandbox_mode</config_path>
+                </field>
+
+                <field id="api_key" translate="label" type="text" sortOrder="40"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>API Key (Merchant ID)</label>
+                    <config_path>payment/paythor_sanalpospro/api_key</config_path>
+                </field>
+
+                <field id="api_secret" translate="label comment" type="obscure" sortOrder="50"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>API Secret</label>
+                    <comment>Stored encrypted. Leave blank to keep current value.</comment>
+                    <backend_model>Magento\Config\Model\Config\Backend\Encrypted</backend_model>
+                    <config_path>payment/paythor_sanalpospro/api_secret</config_path>
+                </field>
+
+                <field id="webhook_secret" translate="label comment" type="obscure" sortOrder="60"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Webhook HMAC Secret</label>
+                    <comment>Used to verify HMAC-SHA256 signatures on incoming Paythor webhooks.</comment>
+                    <backend_model>Magento\Config\Model\Config\Backend\Encrypted</backend_model>
+                    <config_path>payment/paythor_sanalpospro/webhook_secret</config_path>
+                </field>
+
+                <field id="payment_action" translate="label" type="select" sortOrder="70"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Payment Action</label>
+                    <source_model>Magento\Payment\Model\Source\Invoice</source_model>
+                    <config_path>payment/paythor_sanalpospro/payment_action</config_path>
+                </field>
+
+                <field id="order_status" translate="label" type="select" sortOrder="80"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>New Order Status</label>
+                    <source_model>Magento\Sales\Model\Config\Source\Order\Status\NewStatus</source_model>
+                    <config_path>payment/paythor_sanalpospro/order_status</config_path>
+                </field>
+
+                <field id="allowspecific" translate="label" type="allowspecific" sortOrder="90"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Payment from Applicable Countries</label>
+                    <source_model>Magento\Payment\Model\Config\Source\Allspecificcountries</source_model>
+                    <config_path>payment/paythor_sanalpospro/allowspecific</config_path>
+                </field>
+
+                <field id="specificcountry" translate="label" type="multiselect" sortOrder="100"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Payment from Specific Countries</label>
+                    <source_model>Magento\Directory\Model\Config\Source\Country</source_model>
+                    <can_be_empty>1</can_be_empty>
+                    <depends>
+                        <field id="allowspecific">1</field>
+                    </depends>
+                    <config_path>payment/paythor_sanalpospro/specificcountry</config_path>
+                </field>
+
+                <field id="sort_order" translate="label" type="text" sortOrder="110"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Sort Order</label>
+                    <frontend_class>validate-number</frontend_class>
+                    <config_path>payment/paythor_sanalpospro/sort_order</config_path>
+                </field>
+
+                <field id="debug" translate="label comment" type="select" sortOrder="120"
+                       showInDefault="1" showInWebsite="1" showInStore="0">
+                    <label>Debug Logging</label>
+                    <comment>Logs API traffic to var/log/paythor_sanalpospro.log</comment>
+                    <source_model>Magento\Config\Model\Config\Source\Yesno</source_model>
+                    <config_path>payment/paythor_sanalpospro/debug</config_path>
+                </field>
+            </group>
+        </section>
+    </system>
+</config>
