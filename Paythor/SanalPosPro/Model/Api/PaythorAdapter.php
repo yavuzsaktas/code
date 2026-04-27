@@ -11,6 +11,7 @@ use Eticsoft\PaythorClient\Models\Payment\Invoice;
 use Eticsoft\PaythorClient\Models\Payment\Order as PaythorOrder;
 use Eticsoft\PaythorClient\Models\Payment\Payer;
 use Eticsoft\PaythorClient\Models\Payment\Shipping;
+use Magento\Quote\Api\Data\CartInterface;
 use Magento\Sales\Api\Data\OrderInterface;
 use Paythor\SanalPosPro\Model\Config\PaymentConfig;
 use Psr\Log\LoggerInterface;
@@ -85,23 +86,50 @@ class PaythorAdapter
         $lastName  = (string)($billing ? $billing->getLastname()  : $order->getCustomerLastname());
 
         // --- Cart ---
-        $cart = new Cart();
+        $cart          = new Cart();
+        $itemsRowTotal = 0.0;
+
         foreach ($order->getItems() as $item) {
             if ($item->getParentItemId()) {
                 continue;
             }
+            $qty = (int)$item->getQtyOrdered();
+            if ($qty <= 0) {
+                continue;
+            }
+
+            $rowTotalInclTax = (float)$item->getRowTotalInclTax();
+            $discountAmount  = (float)$item->getDiscountAmount();
+            $effectiveRow    = max(0.0, $rowTotalInclTax - $discountAmount);
+            $effectiveUnit   = $effectiveRow / $qty;
+
+            $itemsRowTotal += $effectiveRow;
+
             $cart->addItem(
                 (string)$item->getSku(),
                 (string)$item->getName(),
                 'product',
-                number_format((float)$item->getPriceInclTax(), 2, '.', ''),
-                (int)$item->getQtyOrdered()
+                number_format($effectiveUnit, 2, '.', ''),
+                $qty
             );
         }
 
         $shippingAmount = (float)$order->getShippingInclTax();
         if ($shippingAmount > 0) {
             $cart->addItem('SHIPPING', 'Shipping', 'shipping', number_format($shippingAmount, 2, '.', ''), 1);
+        }
+
+        $grandTotal = (float)$order->getGrandTotal();
+        $cartSum    = round($itemsRowTotal + $shippingAmount, 2);
+        $diff       = round($grandTotal - $cartSum, 2);
+        if (abs($diff) >= 0.01) {
+            $cart->addItem(
+                'ADJUSTMENT',
+                $diff > 0 ? 'Fee Adjustment' : 'Discount Adjustment',
+                'discount',
+                number_format($diff, 2, '.', ''),
+                1
+            );
         }
 
         // Paythor requires state for credit card payments on both payer and shipping addresses.
@@ -244,6 +272,175 @@ class PaythorAdapter
         }
 
         return '';
+    }
+
+    /**
+     * Creates a Paythor payment session directly from the active quote (cart),
+     * without converting it to a Magento order first.
+     * This keeps the cart alive so customers can retry if they abandon the payment.
+     *
+     * @return array{iframe_html:string, transaction_id:string, raw:array}
+     * @throws \RuntimeException
+     */
+    public function createPaymentFromQuote(CartInterface $quote, string $callbackUrl, string $remoteIp = ''): array
+    {
+        /** @var \Magento\Quote\Model\Quote $quote */
+        $storeId      = (int)$quote->getStoreId();
+        $client       = $this->getClient($storeId);
+        $billing      = $quote->getBillingAddress();
+        $shippingAddr = $quote->getShippingAddress() ?: $billing;
+
+        $firstName     = (string)($billing && $billing->getFirstname() ? $billing->getFirstname() : $quote->getCustomerFirstname());
+        $lastName      = (string)($billing && $billing->getLastname()  ? $billing->getLastname()  : $quote->getCustomerLastname());
+        $customerEmail = (string)($quote->getCustomerEmail() ?: ($billing ? $billing->getEmail() : ''));
+
+        // --- Cart ---
+        // Use the effective price per unit (row total incl. tax minus discount divided by qty)
+        // so that sum(item_price × qty) + shipping ≤ grandTotal sent as payment amount.
+        // Sending original pre-discount prices causes Paythor to reject with
+        // "capture.amount cannot be greater than capturable payment amount".
+        $cart          = new Cart();
+        $itemsRowTotal = 0.0;
+
+        foreach ($quote->getAllVisibleItems() as $item) {
+            $qty = (int)$item->getQty();
+            if ($qty <= 0) {
+                continue;
+            }
+
+            $rowTotalInclTax = (float)$item->getRowTotalInclTax(); // qty × price_incl_tax, before discount
+            $discountAmount  = (float)$item->getDiscountAmount();   // discount applied to this row
+            $effectiveRow    = max(0.0, $rowTotalInclTax - $discountAmount);
+            $effectiveUnit   = $effectiveRow / $qty;
+
+            $itemsRowTotal += $effectiveRow;
+
+            $cart->addItem(
+                (string)$item->getSku(),
+                (string)$item->getName(),
+                'product',
+                number_format($effectiveUnit, 2, '.', ''),
+                $qty
+            );
+        }
+
+        $shippingAmount = $shippingAddr ? (float)$shippingAddr->getShippingInclTax() : 0.0;
+        if ($shippingAmount > 0.0) {
+            $cart->addItem('SHIPPING', 'Shipping', 'shipping', number_format($shippingAmount, 2, '.', ''), 1);
+        }
+
+        // If rounding leaves a tiny gap between items+shipping and grandTotal,
+        // add a small adjustment item so the totals agree inside Paythor.
+        $grandTotal = (float)$quote->getGrandTotal();
+        $cartSum    = round($itemsRowTotal + $shippingAmount, 2);
+        $diff       = round($grandTotal - $cartSum, 2);
+        if (abs($diff) >= 0.01) {
+            $cart->addItem(
+                'ADJUSTMENT',
+                $diff > 0 ? 'Fee Adjustment' : 'Discount Adjustment',
+                'discount',
+                number_format($diff, 2, '.', ''),
+                1
+            );
+        }
+
+        $payerAddress = $this->buildPaythorAddress($billing ?: $shippingAddr);
+        $shipAddress  = $this->buildPaythorAddress($shippingAddr ?: $billing);
+
+        // --- Payer ---
+        $payer = new Payer();
+        $payer->setFirstName($firstName);
+        $payer->setLastName($lastName);
+        $payer->setEmail($customerEmail);
+        $payer->setPhone($billing ? (string)$billing->getTelephone() : '');
+        $payer->setAddress($payerAddress);
+        $payer->setIp($remoteIp ?: ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1'));
+
+        // --- Shipping ---
+        $shipping = new Shipping();
+        $shipping->setFirstName($firstName);
+        $shipping->setLastName($lastName);
+        $shipping->setPhone($shippingAddr ? (string)$shippingAddr->getTelephone() : '');
+        $shipping->setEmail($customerEmail);
+        $shipping->setAddress($shipAddress);
+
+        // --- Invoice ---
+        $invoice = new Invoice();
+        $invoice->setId((string)$quote->getId());
+        $invoice->setFirstName($firstName);
+        $invoice->setLastName($lastName);
+        $invoice->setPrice(number_format((float)$quote->getGrandTotal(), 2, '.', ''));
+        $invoice->setQuantity(1);
+
+        // --- Order model ---
+        $orderModel = new PaythorOrder();
+        $orderModel->setCart($cart);
+        $orderModel->setShipping($shipping);
+        $orderModel->setInvoice($invoice);
+
+        // --- Create Payment ---
+        $currency = (string)($quote->getQuoteCurrencyCode() ?: 'TRY');
+        $amount   = number_format((float)$quote->getGrandTotal(), 2, '.', '');
+
+        $create = new Create();
+        $create->setAmount($amount);
+        $create->setCurrency($currency);
+        $create->setMethod('creditcard');
+        $create->setMerchantReference((string)$quote->getId());
+        $create->setReturnUrl($callbackUrl);
+
+        if ($this->config->isDebugEnabled($storeId)) {
+            $this->logger->info('Paythor createPaymentFromQuote request', [
+                'quote_id' => $quote->getId(),
+                'amount'   => $amount,
+                'currency' => $currency,
+            ]);
+        }
+
+        try {
+            $response = $client->payment()->create($create, $payer, $orderModel);
+        } catch (\Throwable $e) {
+            $this->logger->error('Paythor SDK createPaymentFromQuote failed', [
+                'quote_id' => $quote->getId(),
+                'message'  => $e->getMessage(),
+            ]);
+            throw new \RuntimeException('Paythor gateway error: ' . $e->getMessage(), 0, $e);
+        }
+
+        if (($response['status'] ?? '') === 'error') {
+            $details = $response['details'] ?? [];
+            $reason = is_array($details) && $details !== []
+                ? implode(' | ', array_map(static fn($item): string => (string)$item, $details))
+                : (string)($response['message'] ?? 'Unknown gateway error.');
+            throw new \RuntimeException('Paythor validation failed: ' . $reason);
+        }
+
+        if ($this->config->isDebugEnabled($storeId)) {
+            $this->logger->info('Paythor createPaymentFromQuote response', [
+                'quote_id' => $quote->getId(),
+                'response' => $response,
+            ]);
+        }
+
+        $iframeHtml    = $this->extractIframe($response);
+        $transactionId = (string)($response['data']['transaction_id']
+            ?? $response['data']['id']
+            ?? $response['transaction_id']
+            ?? '');
+
+        if ($iframeHtml === '') {
+            $this->logger->error('Paythor returned malformed response for quote', [
+                'quote_id' => $quote->getId(),
+                'response' => $response,
+            ]);
+            throw new \RuntimeException('Paythor returned an invalid response.');
+        }
+
+        return [
+            'iframe_html'    => $iframeHtml,
+            'transaction_id' => $transactionId,
+            'raw'            => $response,
+        ];
     }
 
     /**

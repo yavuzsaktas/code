@@ -8,12 +8,13 @@
  * Responsibilities:
  *   1. Validate session + form key (CSRF).
  *   2. Force the quote's payment method to paythor_sanalpospro.
- *   3. Submit the quote -> Order via QuoteManagement.
- *   4. Call PaythorAdapter::createPayment() to obtain the iframe HTML.
- *   5. Return JSON { success, iframe_html, order_increment_id }.
+ *   3. Call PaythorAdapter::createPaymentFromQuote() to obtain the iframe HTML.
+ *   4. Store the pending quote ID in the checkout session for Confirm.php to verify.
+ *   5. Return JSON { success, iframe_html, quote_id }.
  *
- * If the SDK call fails AFTER the order is created, we cancel the order
- * so the customer can re-checkout cleanly.
+ * The Magento order is NOT created here. It is created in Confirm.php only after
+ * the customer completes payment in the Paythor iframe, preserving the cart
+ * if the customer abandons or goes back.
  */
 declare(strict_types=1);
 
@@ -30,12 +31,8 @@ use Magento\Framework\Data\Form\FormKey\Validator as FormKeyValidator;
 use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\UrlInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
-use Magento\Quote\Api\CartManagementInterface;
 use Magento\Quote\Api\Data\CartInterface;
 use Magento\Quote\Model\QuoteIdMaskFactory;
-use Magento\Sales\Api\OrderManagementInterface;
-use Magento\Sales\Api\OrderRepositoryInterface;
-use Magento\Sales\Model\Order;
 use Paythor\SanalPosPro\Model\Api\PaythorAdapter;
 use Paythor\SanalPosPro\Model\Config\PaymentConfig;
 use Psr\Log\LoggerInterface;
@@ -48,9 +45,6 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
         private readonly FormKeyValidator $formKeyValidator,
         private readonly CheckoutSession $checkoutSession,
         private readonly CartRepositoryInterface $cartRepository,
-        private readonly CartManagementInterface $cartManagement,
-        private readonly OrderRepositoryInterface $orderRepository,
-        private readonly OrderManagementInterface $orderManagement,
         private readonly PaythorAdapter $paythorAdapter,
         private readonly PaymentConfig $paymentConfig,
         private readonly UrlInterface $urlBuilder,
@@ -59,14 +53,11 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
     ) {
     }
 
-    /**
-     * @return ResultInterface
-     */
     public function execute(): ResultInterface
     {
         $result = $this->jsonFactory->create();
 
-        // -- 1. CSRF / form key ------------------------------------------------
+        // -- 1. CSRF / form key -----------------------------------------------
         if (!$this->formKeyValidator->validate($this->request)) {
             return $result->setHttpResponseCode(403)->setData([
                 'success' => false,
@@ -82,13 +73,10 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
             ]);
         }
 
-        $orderId = null;
-
         try {
             // -- 3. Load quote from session -----------------------------------
             $quote = $this->checkoutSession->getQuote();
 
-            // Fallback for guest checkout: resolve quote by cart_id from frontend payload.
             if (!$this->isValidQuote($quote)) {
                 $cartId = trim((string)$this->request->getParam('cart_id', ''));
                 if ($cartId !== '') {
@@ -100,92 +88,39 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
                 throw new LocalizedException(__('Your cart is empty or invalid.'));
             }
 
-            // -- 4. Force our payment method on the quote ---------------------
+            // -- 4. Stamp payment method on the quote (no order yet) ----------
             $quote->getPayment()->setMethod(PaymentConfig::METHOD_CODE);
-            $quote->setInventoryProcessed(false);
             $quote->collectTotals();
             $this->cartRepository->save($quote);
 
-            // -- 5. Convert quote -> order ------------------------------------
-            $orderId = $this->cartManagement->placeOrder((int)$quote->getId());
-            /** @var Order $order */
-            $order = $this->orderRepository->get((int)$orderId);
+            // -- 5. Request payment link from Paythor -------------------------
+            $callbackUrl = $this->urlBuilder->getUrl('paythor/payment/callback', ['_secure' => true]);
+            $remoteIp    = (string)($this->request->getServer('REMOTE_ADDR') ?? '');
 
-            // Stamp pending payment until the gateway confirms.
-            $order->setState(Order::STATE_PENDING_PAYMENT)
-                  ->setStatus($this->paymentConfig->getNewOrderStatus() ?: Order::STATE_PENDING_PAYMENT)
-                  ->addCommentToStatusHistory(__('Awaiting Paythor SanalPos Pro iframe completion.'));
-            $this->orderRepository->save($order);
+            $payment = $this->paythorAdapter->createPaymentFromQuote($quote, $callbackUrl, $remoteIp);
 
-            // -- 6. Call SDK to obtain iframe HTML ----------------------------
-            $callbackUrl = $this->urlBuilder->getUrl(
-                'paythor/payment/callback',
-                ['_secure' => true]
-            );
-
-            $payment = $this->paythorAdapter->createPayment($order, $callbackUrl);
-
-            // Persist Paythor transaction id on the payment record.
-            if ($payment['transaction_id'] !== '') {
-                $order->getPayment()
-                      ->setLastTransId($payment['transaction_id'])
-                      ->setTransactionId($payment['transaction_id'])
-                      ->setAdditionalInformation('paythor_transaction_id', $payment['transaction_id']);
-                $this->orderRepository->save($order);
-            }
-
-            // -- 7. Clear quote so the cart is empty post-redirect ------------
-            $this->checkoutSession->setLastQuoteId($quote->getId())
-                ->setLastSuccessQuoteId($quote->getId())
-                ->setLastOrderId($order->getId())
-                ->setLastRealOrderId($order->getIncrementId())
-                ->setLastOrderStatus($order->getStatus());
+            // -- 6. Store pending quote ID so Confirm.php can verify session --
+            $this->checkoutSession->setPaythorPendingQuoteId((int)$quote->getId());
 
             return $result->setData([
-                'success'             => true,
-                'iframe_html'         => $payment['iframe_html'],
-                'order_increment_id'  => $order->getIncrementId(),
+                'success'     => true,
+                'iframe_html' => $payment['iframe_html'],
+                'quote_id'    => (string)$quote->getId(),
             ]);
 
         } catch (LocalizedException $e) {
-            $this->cancelOrderSafely($orderId, $e->getMessage());
             return $result->setHttpResponseCode(400)->setData([
                 'success' => false,
                 'message' => $e->getMessage(),
             ]);
         } catch (\Throwable $e) {
             $this->logger->error('Paythor Create controller failure', [
-                'order_id' => $orderId,
-                'message'  => $e->getMessage(),
-                'trace'    => $e->getTraceAsString(),
+                'message' => $e->getMessage(),
+                'trace'   => $e->getTraceAsString(),
             ]);
-            $this->cancelOrderSafely($orderId, $e->getMessage());
             return $result->setHttpResponseCode(500)->setData([
                 'success' => false,
-                'message' => __('We could not start the payment. Please try again. 555')->render(),
-            ]);
-        }
-    }
-
-    /**
-     * Cancels a partially-created order so the storefront stays consistent
-     * if the gateway round-trip fails after order creation.
-     */
-    private function cancelOrderSafely(?int $orderId, string $reason): void
-    {
-        if ($orderId === null) {
-            return;
-        }
-
-        try {
-            $this->orderManagement->cancel($orderId);
-            $order = $this->orderRepository->get($orderId);
-            $order->addCommentToStatusHistory(__('Cancelled automatically: %1', $reason));
-            $this->orderRepository->save($order);
-        } catch (\Throwable $e) {
-            $this->logger->warning('Paythor: failed to cancel orphan order', [
-                'order_id' => $orderId,
-                'message'  => $e->getMessage(),
+                'message' => __('We could not start the payment. Please try again.')->render(),
             ]);
         }
     }
@@ -205,7 +140,6 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
             if ($mask->getQuoteId()) {
                 return $this->cartRepository->getActive((int)$mask->getQuoteId());
             }
-
             if (ctype_digit($cartId)) {
                 return $this->cartRepository->getActive((int)$cartId);
             }
@@ -215,18 +149,8 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
                 'message' => $e->getMessage(),
             ]);
         }
-
         return null;
     }
-
-    // ------------------------------------------------------------------
-    // CsrfAwareActionInterface
-    // ------------------------------------------------------------------
-    // We DO want CSRF protection on this endpoint, and we already validate
-    // the form_key explicitly above. Returning null from both methods tells
-    // Magento "use default validation", which on a frontend POST means the
-    // request must carry a valid form_key cookie.
-    // ------------------------------------------------------------------
 
     public function createCsrfValidationException(RequestInterface $request): ?InvalidRequestException
     {

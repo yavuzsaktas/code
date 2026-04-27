@@ -11,7 +11,7 @@ define([
     'Magento_Checkout/js/model/full-screen-loader',
     'Magento_Checkout/js/action/select-payment-method',
     'Magento_Checkout/js/checkout-data',
-    'Magento_Checkout/js/action/set-payment-information', // YENİ EKLENDİ: Sepet bilgilerini kaydetmek için
+    'Magento_Checkout/js/action/set-payment-information',
     'Magento_Customer/js/model/customer',
     'Magento_Ui/js/modal/modal',
     'Magento_Ui/js/model/messageList',
@@ -27,7 +27,7 @@ define([
     fullScreenLoader,
     selectPaymentMethodAction,
     checkoutData,
-    setPaymentInformationAction, // YENİ EKLENDİ
+    setPaymentInformationAction,
     customer,
     modal,
     globalMessageList,
@@ -40,12 +40,14 @@ define([
         defaults: {
             template: 'Paythor_SanalPosPro/payment/sanalpospro',
             redirectAfterPlaceOrder: false,
-            paythorEndpoint: 'paythor/payment/create'
+            paythorEndpoint: 'paythor/payment/create',
+            paythorConfirmEndpoint: 'paythor/payment/confirm'
         },
 
         modalInstance: null,
         modalContainer: null,
         callbackBound: false,
+        pendingQuoteId: null,
 
         isPlaceOrderActionAllowed: ko.observable(true),
 
@@ -61,8 +63,11 @@ define([
         },
 
         /**
-         * 1. Adım: Magento'ya ödeme/adres bilgilerini kaydettir (Siparişi tamamlamadan).
-         * 2. Adım: Başarılı olursa, bizim Controller'ımıza (paythor/payment/create) AJAX at.
+         * 1. Save payment/address info to Magento (no order created yet).
+         * 2. Call paythor/payment/create to get the iframe HTML (still no order).
+         * 3. Show the iframe modal — cart remains alive at this point.
+         * 4. On payment success postMessage → call paythor/payment/confirm → order created.
+         * 5. On cancel/failure → modal closes, cart is untouched, customer can retry.
          */
         placeOrder: function (data, event) {
             var self = this;
@@ -75,14 +80,12 @@ define([
                 return false;
             }
 
-            // Ödeme yöntemini seçili olarak işaretle
             selectPaymentMethodAction(this.getData());
             checkoutData.setSelectedPaymentMethod(this.getCode());
 
             this.isPlaceOrderActionAllowed(false);
             fullScreenLoader.startLoader();
 
-            // Misafirler için email kontrolü
             if (!customer.isLoggedIn() && !quote.guestEmail) {
                 fullScreenLoader.stopLoader();
                 this.isPlaceOrderActionAllowed(true);
@@ -90,13 +93,11 @@ define([
                 return false;
             }
 
-            // Önce bilgileri Magento'ya kaydet (Hata almamak için bu şart)
             $.when(
                 setPaymentInformationAction(this.messageContainer, {
                     method: this.getCode()
                 })
             ).done(function () {
-                // Kayıt başarılıysa, kendi Controller'ımıza AJAX atıyoruz
                 self._bindCallbackListener();
                 self._sendCreateRequest()
                     .done(function (response) {
@@ -112,6 +113,9 @@ define([
                             return;
                         }
 
+                        // Store quote_id so the pay.paythor.com postMessage listener
+                        // can use it as the reference when calling _sendConfirmRequest.
+                        self.pendingQuoteId = response.quote_id || null;
                         self._openIframeModal(response.iframe_html);
                     })
                     .fail(function (jqXhr) {
@@ -125,8 +129,7 @@ define([
                         self._showError(msg);
                     });
             }).fail(function (jqXhr) {
-                // Some Magento setups return 404 for guest-carts set-payment-information.
-                // Continue with the custom create endpoint instead of hard-failing the flow.
+                // Some Magento setups return 404 for guest set-payment-information — continue anyway.
                 if (jqXhr && jqXhr.status === 404) {
                     self._bindCallbackListener();
                     self._sendCreateRequest()
@@ -143,6 +146,7 @@ define([
                                 return;
                             }
 
+                            self.pendingQuoteId = response.quote_id || null;
                             self._openIframeModal(response.iframe_html);
                         })
                         .fail(function (xhr) {
@@ -176,22 +180,56 @@ define([
 
             var payload = {
                 form_key: $.mage.cookies.get('form_key') || window.checkoutConfig.formKey,
-                method: this.getCode(),
-                cart_id: quoteId,
-                // Quote ID veya Email gönderebiliriz, controller'ın sepeti bulmasına yardımcı olur
-                email: quote.guestEmail || (customer.customerData && customer.customerData.email)
+                method:   this.getCode(),
+                cart_id:  quoteId,
+                email:    quote.guestEmail || (customer.customerData && customer.customerData.email)
             };
 
             return $.ajax({
-                url: urlFormatter.build(this.paythorEndpoint),
-                type: 'POST',
-                dataType: 'json',
-                data: payload,
+                url:        urlFormatter.build(this.paythorEndpoint),
+                type:       'POST',
+                dataType:   'json',
+                data:       payload,
                 showLoader: false,
-                cache: false,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
+                cache:      false,
+                headers:    { 'X-Requested-With': 'XMLHttpRequest' }
+            });
+        },
+
+        /**
+         * Called after Paythor confirms payment via postMessage.
+         * Sends the quote reference to Confirm.php which creates the Magento order.
+         */
+        _sendConfirmRequest: function (reference) {
+            var self = this;
+
+            $.ajax({
+                url:        urlFormatter.build(this.paythorConfirmEndpoint),
+                type:       'POST',
+                dataType:   'json',
+                data: {
+                    form_key:  $.mage.cookies.get('form_key') || window.checkoutConfig.formKey,
+                    reference: reference
+                },
+                showLoader: false,
+                cache:      false,
+                headers:    { 'X-Requested-With': 'XMLHttpRequest' }
+            }).done(function (response) {
+                fullScreenLoader.stopLoader();
+                if (response && response.success && response.redirect_url) {
+                    window.location.replace(response.redirect_url);
+                } else {
+                    self.isPlaceOrderActionAllowed(true);
+                    self._showError(
+                        (response && response.message)
+                            ? response.message
+                            : $t('Could not finalize the order. Please try again.')
+                    );
                 }
+            }).fail(function () {
+                fullScreenLoader.stopLoader();
+                self.isPlaceOrderActionAllowed(true);
+                self._showError($t('Could not finalize the order. Please try again.'));
             });
         },
 
@@ -211,20 +249,21 @@ define([
             $('body').append(this.modalContainer);
 
             this.modalInstance = modal({
-                type: 'popup',
-                modalClass: 'paythor-sanalpospro-modal',
-                title: $t('Secure Card Payment'),
-                responsive: true,
-                innerScroll: true,
+                type:             'popup',
+                modalClass:       'paythor-sanalpospro-modal',
+                title:            $t('Secure Card Payment'),
+                responsive:       true,
+                innerScroll:      true,
                 clickableOverlay: false,
                 buttons: [{
-                    text: $t('Cancel'),
+                    text:  $t('Cancel'),
                     class: 'action secondary action-cancel',
                     click: function () {
                         self.modalInstance.closeModal();
                     }
                 }],
                 closed: function () {
+                    // Cart is still intact — customer can retry without losing items.
                     self.isPlaceOrderActionAllowed(true);
                     if (self.modalContainer) {
                         try { self.modalContainer.remove(); } catch (e) { /* noop */ }
@@ -242,15 +281,40 @@ define([
             }
             this.callbackBound = true;
 
-            var self = this,
-                allowedOrigin = window.location.origin;
+            var self          = this,
+                sameOrigin    = window.location.origin,
+                paythorOrigins = [
+                    'https://pay.paythor.com',
+                    'https://dev-pay.paythor.com'
+                ];
 
             window.addEventListener('message', function (ev) {
-                if (ev.origin !== allowedOrigin) {
+                var data = ev.data;
+
+                // --- Listener A: direct postMessage from Paythor's iframe --------
+                // Paythor sends { isSuccess: true, processID: 'xxx' } from its own domain.
+                if (paythorOrigins.indexOf(ev.origin) !== -1) {
+                    if (!data || data.isSuccess !== true || !data.processID) {
+                        return;
+                    }
+                    if (self.modalInstance) {
+                        try { self.modalInstance.closeModal(); } catch (e) { /* noop */ }
+                    }
+                    // Use the quote_id stored when Create.php responded, not the processID,
+                    // because Confirm.php validates against the session quote_id.
+                    if (self.pendingQuoteId) {
+                        fullScreenLoader.startLoader();
+                        self._sendConfirmRequest(self.pendingQuoteId);
+                    }
                     return;
                 }
 
-                var data = ev.data;
+                // --- Listener B: postMessage bridge from our Callback.php ---------
+                // Used when Paythor redirects the iframe (not the full browser) to our
+                // callback URL, which in turn posts back to this parent window.
+                if (ev.origin !== sameOrigin) {
+                    return;
+                }
                 if (!data || data.source !== 'paythor_sanalpospro') {
                     return;
                 }
@@ -259,11 +323,13 @@ define([
                     if (self.modalInstance) {
                         try { self.modalInstance.closeModal(); } catch (e) { /* noop */ }
                     }
-                    window.location.replace(urlFormatter.build('checkout/onepage/success'));
+                    fullScreenLoader.startLoader();
+                    self._sendConfirmRequest(data.reference);
                 } else {
                     if (self.modalInstance) {
                         try { self.modalInstance.closeModal(); } catch (e) { /* noop */ }
                     }
+                    self.isPlaceOrderActionAllowed(true);
                     self._showError(
                         data.message || $t('Payment was not completed. Please try again.')
                     );

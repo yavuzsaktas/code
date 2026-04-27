@@ -55,6 +55,12 @@
         </arguments>
     </type>
 
+    <type name="Paythor\SanalPosPro\Controller\Payment\Confirm">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
     <type name="Paythor\SanalPosPro\Controller\Webhook\Notify">
         <arguments>
             <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>

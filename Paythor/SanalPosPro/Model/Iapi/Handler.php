@@ -102,19 +102,13 @@ class Handler
     private function actionSetInstallmentOptions(array $params): array
     {
         $options = $params['iapi_installmentOptions'] ?? null;
-
-        // Accept empty input as "clear all" — mirrors WooCommerce behavior where
-        // saving an empty config simply resets the stored installments.
-        if ($options === null) {
-            $options = [];
+        if (empty($options)) {
+            return $this->error('Invalid installment options.');
         }
 
-        $this->configWriter->save(
-            'payment/paythor_sanalpospro/installments',
-            json_encode($options)
-        );
+        $this->configWriter->save('payment/paythor_sanalpospro/installments', json_encode($options));
 
-        return $this->success('Installment options updated successfully');
+        return $this->success('Installment options updated.');
     }
 
     private function actionSetModuleSettings(array $params): array
@@ -181,29 +175,11 @@ class Handler
 
     private function success(string $message, array $data = []): array
     {
-        return [
-            'status'  => 'success',
-            'message' => $message,
-            'data'    => $data,
-            'details' => [],
-            'meta'    => [
-                'xfvv'  => substr($this->paymentConfig->getXfvv(), 0, 10),
-                'nonce' => null,
-            ],
-        ];
+        return ['status' => 'success', 'message' => $message, 'data' => $data];
     }
 
     private function error(string $message): array
     {
-        return [
-            'status'  => 'error',
-            'message' => $message,
-            'data'    => [],
-            'details' => [],
-            'meta'    => [
-                'xfvv'  => substr($this->paymentConfig->getXfvv(), 0, 10),
-                'nonce' => null,
-            ],
-        ];
+        return ['status' => 'error', 'message' => $message];
     }
 }

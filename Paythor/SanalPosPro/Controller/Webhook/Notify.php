@@ -26,6 +26,7 @@ use Magento\Framework\App\CsrfAwareActionInterface;
 use Magento\Framework\App\Request\Http as HttpRequest;
 use Magento\Framework\App\Request\InvalidRequestException;
 use Magento\Framework\App\RequestInterface;
+use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Controller\Result\JsonFactory;
 use Magento\Framework\Controller\ResultInterface;
 use Magento\Framework\DB\Transaction;
@@ -55,6 +56,7 @@ class Notify implements HttpPostActionInterface, CsrfAwareActionInterface
         private readonly Transaction $transaction,
         private readonly OrderSender $orderSender,
         private readonly InvoiceSender $invoiceSender,
+        private readonly ResourceConnection $resourceConnection,
         private readonly LoggerInterface $logger
     ) {
     }
@@ -105,9 +107,14 @@ class Notify implements HttpPostActionInterface, CsrfAwareActionInterface
         }
 
         // -- 3. Locate order --------------------------------------------------
-        $order = $this->loadOrderByIncrementId($orderInc);
+        // Primary lookup: by increment_id (legacy flow where order existed before payment).
+        // Fallback lookup: by paythor_quote_reference in payment additional_information
+        //   (new flow where merchant_order_id is the quote_id set in Create.php).
+        $order = $this->loadOrderByIncrementId($orderInc)
+            ?? $this->loadOrderByQuoteReference($orderInc);
+
         if ($order === null) {
-            $this->logger->warning('Paythor webhook: order not found', ['order' => $orderInc]);
+            $this->logger->warning('Paythor webhook: order not found', ['merchant_order_id' => $orderInc]);
             // Return 200 to avoid retry storms for orders that legitimately
             // do not exist (test pings etc.).
             return $result->setData(['success' => true, 'message' => 'Order not found, ignored.']);
@@ -232,9 +239,6 @@ class Notify implements HttpPostActionInterface, CsrfAwareActionInterface
         $this->orderRepository->save($order);
     }
 
-    /**
-     * @param string $incrementId
-     */
     private function loadOrderByIncrementId(string $incrementId): ?Order
     {
         /** @var Order|false $order */
@@ -244,6 +248,42 @@ class Notify implements HttpPostActionInterface, CsrfAwareActionInterface
             ->getFirstItem();
 
         return ($order && $order->getId()) ? $order : null;
+    }
+
+    /**
+     * Fallback for the new payment flow where merchantReference = quote_id.
+     * Confirm.php stores the quote_id in payment additional_information under
+     * 'paythor_quote_reference' so the webhook can resolve the order here.
+     */
+    private function loadOrderByQuoteReference(string $quoteRef): ?Order
+    {
+        if (!ctype_digit($quoteRef)) {
+            return null;
+        }
+
+        try {
+            $connection = $this->resourceConnection->getConnection();
+            $table      = $this->resourceConnection->getTableName('sales_order_payment');
+
+            $orderId = $connection->fetchOne(
+                $connection->select()
+                    ->from($table, ['parent_id'])
+                    ->where('additional_information LIKE ?', '%"paythor_quote_reference":"' . $quoteRef . '"%')
+                    ->limit(1)
+            );
+
+            if (!$orderId) {
+                return null;
+            }
+
+            return $this->orderRepository->get((int)$orderId);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Paythor webhook: quote reference lookup failed', [
+                'quote_ref' => $quoteRef,
+                'message'   => $e->getMessage(),
+            ]);
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------
