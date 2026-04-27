@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * File: app/code/Paythor/SanalPosPro/etc/payment.xml
+ *
+ * Declares the payment method to Magento's payment subsystem.
+ * The "model" attribute is intentionally omitted in <methods> – the
+ * concrete class is wired through config.xml + di.xml virtual types,
+ * which is the modern (2.3+) approach.
+ */
+-->
+<payment xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Payment:etc/payment.xsd">
+    <methods>
+        <method name="paythor_sanalpospro">
+            <allow_multiple_address>0</allow_multiple_address>
+        </method>
+    </methods>
+</payment>

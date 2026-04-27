@@ -1,0 +1,91 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * File: app/code/Paythor/SanalPosPro/etc/di.xml
+ *
+ * Wires:
+ *   - A dedicated Monolog handler/logger for paythor_sanalpospro.log
+ *     (two virtual types: PaythorSanalPosProLoggerHandler + PaythorSanalPosProLogger)
+ *   - Constructor injection of the dedicated logger into our adapter
+ *     and controllers.
+ *   - Configuration plumbing via Magento\Payment\Gateway\Config\Config
+ *     virtual type so any future Gateway-style commands can reuse it.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+
+    <!-- ============================================================ -->
+    <!-- Dedicated rotating file logger: var/log/paythor_sanalpospro.log -->
+    <!-- ============================================================ -->
+    <virtualType name="PaythorSanalPosProLoggerHandler" type="Magento\Framework\Logger\Handler\Base">
+        <arguments>
+            <argument name="fileName" xsi:type="string">/var/log/paythor_sanalpospro.log</argument>
+        </arguments>
+    </virtualType>
+
+    <virtualType name="PaythorSanalPosProLogger" type="Monolog\Logger">
+        <arguments>
+            <argument name="name" xsi:type="string">paythor_sanalpospro</argument>
+            <argument name="handlers" xsi:type="array">
+                <item name="system" xsi:type="object">PaythorSanalPosProLoggerHandler</item>
+            </argument>
+        </arguments>
+    </virtualType>
+
+    <!-- ============================================================ -->
+    <!-- Inject the dedicated logger wherever Psr\Log\LoggerInterface  -->
+    <!-- is requested by classes inside the Paythor\SanalPosPro NS.   -->
+    <!-- ============================================================ -->
+    <type name="Paythor\SanalPosPro\Model\Api\PaythorAdapter">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+    <type name="Paythor\SanalPosPro\Controller\Payment\Create">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+    <type name="Paythor\SanalPosPro\Controller\Payment\Callback">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+    <type name="Paythor\SanalPosPro\Controller\Payment\Confirm">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+    <type name="Paythor\SanalPosPro\Controller\Webhook\Notify">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+    <!-- ============================================================ -->
+    <!-- Reusable Gateway Config virtual type bound to our method code -->
+    <!-- (lets us call $config->getValue('api_key') etc. if needed).   -->
+    <!-- ============================================================ -->
+    <virtualType name="PaythorSanalPosProGatewayConfig" type="Magento\Payment\Gateway\Config\Config">
+        <arguments>
+            <argument name="methodCode" xsi:type="const">Paythor\SanalPosPro\Model\Config\PaymentConfig::METHOD_CODE</argument>
+        </arguments>
+    </virtualType>
+
+    <type name="Paythor\SanalPosPro\Model\PaymentMethod">
+        <arguments>
+            <!--
+                NOTE: do NOT remap "logger" here - PaymentMethod's $logger
+                argument is the strongly-typed Magento\Payment\Model\Method\Logger
+                required by AbstractMethod. The PSR channel goes into $psrLogger.
+            -->
+            <argument name="psrLogger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+</config>

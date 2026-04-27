@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * File: app/code/Paythor/SanalPosPro/etc/config.xml
+ *
+ * Default configuration values for Paythor SanalPos Pro.
+ * Secrets (api_secret, webhook_secret) are intentionally omitted -
+ * they must be provided by the merchant via admin and are stored
+ * encrypted (Magento\Config\Model\Config\Backend\Encrypted).
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:module:Magento_Store:etc/config.xsd">
+    <default>
+        <payment>
+            <paythor_sanalpospro>
+                <active>0</active>
+                <model>Paythor\SanalPosPro\Model\PaymentMethod</model>
+                <title>Credit / Debit Card (Paythor SanalPos Pro)</title>
+                <payment_action>authorize_capture</payment_action>
+                <order_status>pending_payment</order_status>
+                <sandbox_mode>1</sandbox_mode>
+                <app_id>105</app_id>
+                <debug>0</debug>
+                <allowspecific>0</allowspecific>
+                <can_use_internal>0</can_use_internal>
+                <can_use_checkout>1</can_use_checkout>
+                <can_authorize>1</can_authorize>
+                <can_capture>1</can_capture>
+                <can_refund>1</can_refund>
+                <can_void>1</can_void>
+                <can_use_for_multishipping>0</can_use_for_multishipping>
+                <is_gateway>1</is_gateway>
+                <currency>TRY,USD,EUR</currency>
+            </paythor_sanalpospro>
+        </payment>
+    </default>
+</config>

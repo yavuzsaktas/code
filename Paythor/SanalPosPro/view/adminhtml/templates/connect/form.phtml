@@ -1,0 +1,77 @@
+<?php
+/** @var \Paythor\SanalPosPro\Block\Adminhtml\Connect\ConnectBlock $block */
+
+$iapiUrl  = $block->getIapiUrl();
+$xfvv     = $block->getXfvv();
+$storeUrl = $block->getStoreBaseUrl();
+$config   = $block->getPaymentConfig();
+$statuses = $block->getOrderStatusOptions();
+?>
+
+<!-- CDN React app -->
+<script>
+  /* ── Paythor CDN app bootstrap variables ───────────────────────── */
+  window.xfvv       = '<?= $block->escapeJs($xfvv) ?>';
+  window.target_url = '<?= $block->escapeJs($iapiUrl) ?>';
+  window.store_url  = '<?= $block->escapeJs($storeUrl) ?>';
+  window.app_id     = 105;
+  window.platform   = 'magento';
+  window.program_id = 1;
+window.style_url  = 'https://cdn.paythor.com/1/105/10.0.4/index.css';
+  // Avoid persistent app/token mismatch loops: if the browser still holds a token
+  // from another app context (e.g. app 104), CDN UI may skip fresh signin and send
+  // stale credentials that fail hash verification against Magento app 105 keys.
+  (function () {
+    var forcedAppId = '105';
+    var markerKey = 'paythor-connect-app-id';
+    var staleKeys = [
+      'etc-token',
+      'etc-user-level',
+      'etc-is-impersonating',
+      'etc-original-admin-token',
+      'etc-impersonate-token'
+    ];
+
+    try {
+      var previousAppId = localStorage.getItem(markerKey);
+      if (previousAppId !== forcedAppId) {
+        staleKeys.forEach(function (k) { localStorage.removeItem(k); });
+        sessionStorage.clear();
+        localStorage.setItem(markerKey, forcedAppId);
+      }
+    } catch (e) {
+      // no-op: storage may be blocked by browser policy
+    }
+  })();
+
+  window.generalSettings = {
+    order_status: {
+      default_value: '<?= $block->escapeJs($config->getNewOrderStatus()) ?>',
+      options: {
+        <?php foreach ($statuses as $code => $label): ?>
+        '<?= $block->escapeJs($code) ?>': '<?= $block->escapeJs($label) ?>',
+        <?php endforeach; ?>
+      }
+    },
+    currency_convert: {
+      default_value: 'no',
+      options: { yes: 'Yes', no: 'No' }
+    },
+    showInstallmentsTabs: {
+      default_value: 'no',
+      options: { yes: 'Yes', no: 'No' }
+    },
+    paymentPageTheme: {
+      default_value: 'modern',
+      options: { classic: 'Classic', modern: 'Modern' }
+    }
+  };
+</script>
+
+<div id="root"
+     data-platform="magento"
+     data-app-id="105"
+     data-program-id="1">
+</div>
+
+<script type="module" src="https://cdn.paythor.com/1/105/10.0.4/index.js"></script>
