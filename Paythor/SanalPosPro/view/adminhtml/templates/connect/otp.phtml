@@ -1,0 +1,54 @@
+<?php
+/** @var \Magento\Backend\Block\Template $block */
+$verifyUrl = $block->getUrl('paythor_sanalpospro/connect/verifyOtp');
+$backUrl   = $block->getUrl('paythor_sanalpospro/connect/index');
+?>
+
+<div class="paythor-connect-wrap" style="max-width:480px;margin:32px auto;font-family:sans-serif;">
+
+    <div style="background:#1a1a2e;color:#fff;padding:24px 28px;border-radius:10px 10px 0 0;display:flex;align-items:center;gap:12px;">
+        <span style="font-size:28px;font-weight:700;">PayThor</span>
+        <span style="font-size:14px;opacity:.7;">Two-Factor Verification</span>
+    </div>
+
+    <div style="background:#fff;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;padding:32px;">
+
+        <div style="text-align:center;margin-bottom:24px;">
+            <div style="font-size:40px;">📧</div>
+            <h3 style="margin:8px 0 6px;font-size:18px;">Check Your Email</h3>
+            <p style="margin:0;color:#666;font-size:13px;">
+                An OTP code has been sent to your registered email address.<br>
+                Enter it below to complete the connection.
+            </p>
+        </div>
+
+        <form method="POST" action="<?= $block->escapeUrl($verifyUrl) ?>">
+            <?= $block->getBlockHtml('formkey') ?>
+
+            <div style="margin-bottom:20px;">
+                <label style="display:block;font-size:13px;font-weight:600;margin-bottom:8px;text-align:center;">
+                    OTP Code
+                </label>
+                <input type="text" name="otp_code" required maxlength="6"
+                       autofocus autocomplete="one-time-code"
+                       style="width:100%;padding:14px;border:2px solid #1a1a2e;border-radius:8px;font-size:24px;text-align:center;letter-spacing:8px;box-sizing:border-box;"
+                       placeholder="· · · · · ·"/>
+            </div>
+
+            <button type="submit"
+                    style="width:100%;background:#1a1a2e;color:#fff;border:none;padding:12px;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:12px;">
+                Verify &amp; Connect
+            </button>
+
+            <a href="<?= $block->escapeUrl($backUrl) ?>"
+               style="display:block;text-align:center;color:#666;font-size:13px;text-decoration:none;">
+                ← Back to login
+            </a>
+        </form>
+
+        <div style="margin-top:20px;padding:12px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;font-size:12px;color:#555;">
+            <strong>Note:</strong> The OTP expires in a few minutes. If you didn't receive it,
+            go back and try logging in again.
+        </div>
+    </div>
+</div>

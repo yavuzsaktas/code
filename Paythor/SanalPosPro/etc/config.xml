@@ -20,8 +20,7 @@
                 <payment_action>authorize_capture</payment_action>
                 <order_status>pending_payment</order_status>
                 <sandbox_mode>1</sandbox_mode>
-                <sandbox_endpoint>https://sandbox.paythor.com/sanalpospro/v1</sandbox_endpoint>
-                <production_endpoint>https://api.paythor.com/sanalpospro/v1</production_endpoint>
+                <app_id>105</app_id>
                 <debug>0</debug>
                 <allowspecific>0</allowspecific>
                 <can_use_internal>0</can_use_internal>

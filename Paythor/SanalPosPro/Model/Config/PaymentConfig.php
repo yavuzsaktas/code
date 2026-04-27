@@ -1,44 +1,38 @@
 <?php
-/**
- * File: app/code/Paythor/SanalPosPro/Model/Config/PaymentConfig.php
- *
- * Strongly-typed configuration accessor for the Paythor SanalPos Pro
- * payment method. All admin-configured values are read through this
- * class to keep ScopeConfigInterface usage out of business logic.
- */
 declare(strict_types=1);
 
 namespace Paythor\SanalPosPro\Model\Config;
 
 use Magento\Framework\App\Config\ScopeConfigInterface;
-use Magento\Framework\Encryption\EncryptorInterface;
+use Magento\Framework\App\Config\Storage\WriterInterface;
 use Magento\Store\Model\ScopeInterface;
 
 class PaymentConfig
 {
-    public const METHOD_CODE = 'paythor_sanalpospro';
+    public const METHOD_CODE     = 'paythor_sanalpospro';
+    public const PROGRAM_ID      = 1;
+    public const API_BASE_URL    = 'https://live-api.sanalpospro.com';
+    public const MAGENTO_APP_ID  = 105;
 
     private const XML_PATH_PREFIX = 'payment/' . self::METHOD_CODE . '/';
 
-    public const XML_PATH_ACTIVE              = self::XML_PATH_PREFIX . 'active';
-    public const XML_PATH_TITLE               = self::XML_PATH_PREFIX . 'title';
-    public const XML_PATH_SANDBOX_MODE        = self::XML_PATH_PREFIX . 'sandbox_mode';
-    public const XML_PATH_API_KEY             = self::XML_PATH_PREFIX . 'api_key';
-    public const XML_PATH_API_SECRET          = self::XML_PATH_PREFIX . 'api_secret';
-    public const XML_PATH_WEBHOOK_SECRET      = self::XML_PATH_PREFIX . 'webhook_secret';
-    public const XML_PATH_SANDBOX_ENDPOINT    = self::XML_PATH_PREFIX . 'sandbox_endpoint';
-    public const XML_PATH_PRODUCTION_ENDPOINT = self::XML_PATH_PREFIX . 'production_endpoint';
-    public const XML_PATH_PAYMENT_ACTION      = self::XML_PATH_PREFIX . 'payment_action';
-    public const XML_PATH_ORDER_STATUS        = self::XML_PATH_PREFIX . 'order_status';
-    public const XML_PATH_DEBUG               = self::XML_PATH_PREFIX . 'debug';
+    public const XML_PATH_ACTIVE          = self::XML_PATH_PREFIX . 'active';
+    public const XML_PATH_TITLE           = self::XML_PATH_PREFIX . 'title';
+    public const XML_PATH_SANDBOX_MODE    = self::XML_PATH_PREFIX . 'sandbox_mode';
+    public const XML_PATH_PAYMENT_ACTION  = self::XML_PATH_PREFIX . 'payment_action';
+    public const XML_PATH_ORDER_STATUS    = self::XML_PATH_PREFIX . 'order_status';
+    public const XML_PATH_DEBUG           = self::XML_PATH_PREFIX . 'debug';
+    public const XML_PATH_APP_ID          = self::XML_PATH_PREFIX . 'app_id';
 
-    /**
-     * @param ScopeConfigInterface $scopeConfig
-     * @param EncryptorInterface   $encryptor
-     */
+    /** Auto-saved – never entered manually */
+    public const XML_PATH_PUBLIC_KEY      = self::XML_PATH_PREFIX . 'public_key';
+    public const XML_PATH_PRIVATE_KEY     = self::XML_PATH_PREFIX . 'private_key';
+    public const XML_PATH_APP_INSTANCE_ID = self::XML_PATH_PREFIX . 'app_instance_id';
+    public const XML_PATH_XFVV           = self::XML_PATH_PREFIX . 'xfvv';
+
     public function __construct(
         private readonly ScopeConfigInterface $scopeConfig,
-        private readonly EncryptorInterface $encryptor
+        private readonly WriterInterface $configWriter
     ) {
     }
 
@@ -69,57 +63,71 @@ class PaymentConfig
         );
     }
 
-    public function getApiKey(?int $storeId = null): string
+    /**
+     * Returns the Magento platform app ID.
+     * Falls back to MAGENTO_APP_ID constant if not yet configured.
+     */
+    public function getAppId(?int $storeId = null): int
+    {
+        $configured = (int)$this->scopeConfig->getValue(
+            self::XML_PATH_APP_ID,
+            ScopeInterface::SCOPE_STORE,
+            $storeId
+        );
+        return $configured > 0 ? $configured : self::MAGENTO_APP_ID;
+    }
+
+    public function getPublicKey(?int $storeId = null): string
     {
         return trim((string)$this->scopeConfig->getValue(
-            self::XML_PATH_API_KEY,
+            self::XML_PATH_PUBLIC_KEY,
             ScopeInterface::SCOPE_STORE,
             $storeId
         ));
     }
 
-    /**
-     * Returns the decrypted API secret.
-     */
-    public function getApiSecret(?int $storeId = null): string
+    public function getPrivateKey(?int $storeId = null): string
     {
-        $encrypted = (string)$this->scopeConfig->getValue(
-            self::XML_PATH_API_SECRET,
+        return trim((string)$this->scopeConfig->getValue(
+            self::XML_PATH_PRIVATE_KEY,
+            ScopeInterface::SCOPE_STORE,
+            $storeId
+        ));
+    }
+
+    public function getAppInstanceId(?int $storeId = null): int
+    {
+        return (int)$this->scopeConfig->getValue(
+            self::XML_PATH_APP_INSTANCE_ID,
             ScopeInterface::SCOPE_STORE,
             $storeId
         );
+    }
 
-        return $encrypted === '' ? '' : (string)$this->encryptor->decrypt($encrypted);
+    public function saveCredentials(string $publicKey, string $privateKey, int $appInstanceId): void
+    {
+        $this->configWriter->save(self::XML_PATH_PUBLIC_KEY, $publicKey);
+        $this->configWriter->save(self::XML_PATH_PRIVATE_KEY, $privateKey);
+        $this->configWriter->save(self::XML_PATH_APP_INSTANCE_ID, $appInstanceId);
+    }
+
+    public function saveAppId(int $appId): void
+    {
+        $this->configWriter->save(self::XML_PATH_APP_ID, $appId);
     }
 
     /**
-     * Returns the decrypted webhook HMAC secret.
+     * Returns the XFVV security token used to authenticate IAPI requests.
+     * Generates and persists one on first call if not yet set.
      */
-    public function getWebhookSecret(?int $storeId = null): string
+    public function getXfvv(): string
     {
-        $encrypted = (string)$this->scopeConfig->getValue(
-            self::XML_PATH_WEBHOOK_SECRET,
-            ScopeInterface::SCOPE_STORE,
-            $storeId
-        );
-
-        return $encrypted === '' ? '' : (string)$this->encryptor->decrypt($encrypted);
-    }
-
-    /**
-     * Returns the active API endpoint based on sandbox flag.
-     */
-    public function getApiEndpoint(?int $storeId = null): string
-    {
-        $path = $this->isSandboxMode($storeId)
-            ? self::XML_PATH_SANDBOX_ENDPOINT
-            : self::XML_PATH_PRODUCTION_ENDPOINT;
-
-        return rtrim((string)$this->scopeConfig->getValue(
-            $path,
-            ScopeInterface::SCOPE_STORE,
-            $storeId
-        ), '/');
+        $xfvv = trim((string)$this->scopeConfig->getValue(self::XML_PATH_XFVV));
+        if ($xfvv === '') {
+            $xfvv = hash('sha256', (string)time() . (string)random_int(1000000, 9999999));
+            $this->configWriter->save(self::XML_PATH_XFVV, $xfvv);
+        }
+        return $xfvv;
     }
 
     public function getPaymentAction(?int $storeId = null): string
@@ -149,13 +157,14 @@ class PaymentConfig
         );
     }
 
-    /**
-     * Verifies the module is operationally ready (active + credentials present).
-     */
+    public function isConnected(?int $storeId = null): bool
+    {
+        return $this->getPublicKey($storeId) !== ''
+            && $this->getPrivateKey($storeId) !== '';
+    }
+
     public function isOperational(?int $storeId = null): bool
     {
-        return $this->isActive($storeId)
-            && $this->getApiKey($storeId) !== ''
-            && $this->getApiSecret($storeId) !== '';
+        return $this->isActive($storeId) && $this->isConnected($storeId);
     }
 }

@@ -74,9 +74,17 @@ class PaymentMethod extends AbstractMethod
         $this->psrLogger = $psrLogger;
     }
 
-    public function isAvailable(\Magento\Quote\Api\Data\CartInterface $quote = null)
+    public function isAvailable(CartInterface $quote = null)
     {
-        // Şimdilik test için her zaman true döndürüyoruz. isOperational kontrolü hata verebilir.
-        return true; 
+        if (!parent::isAvailable($quote)) {
+            return false;
+        }
+
+        $storeId = null;
+        if ($quote && $quote->getStoreId() !== null) {
+            $storeId = (int)$quote->getStoreId();
+        }
+
+        return $this->paymentConfig->isOperational($storeId);
     }
 }

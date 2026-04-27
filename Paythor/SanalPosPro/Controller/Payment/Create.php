@@ -31,6 +31,8 @@ use Magento\Framework\Exception\LocalizedException;
 use Magento\Framework\UrlInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Api\CartManagementInterface;
+use Magento\Quote\Api\Data\CartInterface;
+use Magento\Quote\Model\QuoteIdMaskFactory;
 use Magento\Sales\Api\OrderManagementInterface;
 use Magento\Sales\Api\OrderRepositoryInterface;
 use Magento\Sales\Model\Order;
@@ -52,7 +54,8 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
         private readonly PaythorAdapter $paythorAdapter,
         private readonly PaymentConfig $paymentConfig,
         private readonly UrlInterface $urlBuilder,
-        private readonly LoggerInterface $logger
+        private readonly LoggerInterface $logger,
+        private readonly QuoteIdMaskFactory $quoteIdMaskFactory
     ) {
     }
 
@@ -84,7 +87,16 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
         try {
             // -- 3. Load quote from session -----------------------------------
             $quote = $this->checkoutSession->getQuote();
-            if (!$quote->getId() || (float)$quote->getGrandTotal() <= 0.0) {
+
+            // Fallback for guest checkout: resolve quote by cart_id from frontend payload.
+            if (!$this->isValidQuote($quote)) {
+                $cartId = trim((string)$this->request->getParam('cart_id', ''));
+                if ($cartId !== '') {
+                    $quote = $this->loadQuoteByCartId($cartId);
+                }
+            }
+
+            if (!$this->isValidQuote($quote)) {
                 throw new LocalizedException(__('Your cart is empty or invalid.'));
             }
 
@@ -176,6 +188,35 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
                 'message'  => $e->getMessage(),
             ]);
         }
+    }
+
+    private function isValidQuote(?CartInterface $quote): bool
+    {
+        return $quote !== null
+            && (int)$quote->getId() > 0
+            && (float)$quote->getGrandTotal() > 0.0
+            && (int)$quote->getItemsCount() > 0;
+    }
+
+    private function loadQuoteByCartId(string $cartId): ?CartInterface
+    {
+        try {
+            $mask = $this->quoteIdMaskFactory->create()->load($cartId, 'masked_id');
+            if ($mask->getQuoteId()) {
+                return $this->cartRepository->getActive((int)$mask->getQuoteId());
+            }
+
+            if (ctype_digit($cartId)) {
+                return $this->cartRepository->getActive((int)$cartId);
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Paythor: unable to resolve quote by cart_id', [
+                'cart_id' => $cartId,
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
     }
 
     // ------------------------------------------------------------------

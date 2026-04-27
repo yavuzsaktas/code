@@ -124,7 +124,40 @@ define([
                         }
                         self._showError(msg);
                     });
-            }).fail(function () {
+            }).fail(function (jqXhr) {
+                // Some Magento setups return 404 for guest-carts set-payment-information.
+                // Continue with the custom create endpoint instead of hard-failing the flow.
+                if (jqXhr && jqXhr.status === 404) {
+                    self._bindCallbackListener();
+                    self._sendCreateRequest()
+                        .done(function (response) {
+                            fullScreenLoader.stopLoader();
+                            self.isPlaceOrderActionAllowed(true);
+
+                            if (!response || response.success !== true || !response.iframe_html) {
+                                self._showError(
+                                    (response && response.message)
+                                        ? response.message
+                                        : $t('Unable to initialize payment. Please try again.')
+                                );
+                                return;
+                            }
+
+                            self._openIframeModal(response.iframe_html);
+                        })
+                        .fail(function (xhr) {
+                            fullScreenLoader.stopLoader();
+                            self.isPlaceOrderActionAllowed(true);
+
+                            var fallbackMsg = $t('Unable to initialize payment. Please try again.');
+                            if (xhr && xhr.responseJSON && xhr.responseJSON.message) {
+                                fallbackMsg = xhr.responseJSON.message;
+                            }
+                            self._showError(fallbackMsg);
+                        });
+                    return;
+                }
+
                 fullScreenLoader.stopLoader();
                 self.isPlaceOrderActionAllowed(true);
                 self._showError($t('Failed to save payment information. Please check your billing details.'));
@@ -134,9 +167,17 @@ define([
         },
 
         _sendCreateRequest: function () {
+            var quoteId = null;
+            if (typeof quote.getQuoteId === 'function') {
+                quoteId = quote.getQuoteId();
+            } else if (quote.quoteId) {
+                quoteId = (typeof quote.quoteId === 'function') ? quote.quoteId() : quote.quoteId;
+            }
+
             var payload = {
                 form_key: $.mage.cookies.get('form_key') || window.checkoutConfig.formKey,
                 method: this.getCode(),
+                cart_id: quoteId,
                 // Quote ID veya Email gönderebiliriz, controller'ın sepeti bulmasına yardımcı olur
                 email: quote.guestEmail || (customer.customerData && customer.customerData.email)
             };

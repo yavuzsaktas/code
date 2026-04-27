@@ -1,31 +1,22 @@
 <?php
-/**
- * File: app/code/Paythor/SanalPosPro/Model/Api/PaythorAdapter.php
- *
- * Thin SDK adapter. Bridges Magento's DI/config world to the pure-PHP
- * Eticsoft\Sanalpospro SDK that lives under vendor/Eticsoft/Sanalpospro.
- *
- *  - Constructor injection only (NO ObjectManager).
- *  - Reads config exclusively through PaymentConfig (which itself
- *    wraps ScopeConfigInterface + EncryptorInterface).
- *  - Returns a normalized DTO array so controllers don't depend on
- *    the SDK's response shape.
- */
 declare(strict_types=1);
 
 namespace Paythor\SanalPosPro\Model\Api;
 
+use Eticsoft\PaythorClient\PaythorClient;
+use Eticsoft\PaythorClient\Models\Payment\Address;
+use Eticsoft\PaythorClient\Models\Payment\Cart;
+use Eticsoft\PaythorClient\Models\Payment\Create;
+use Eticsoft\PaythorClient\Models\Payment\Invoice;
+use Eticsoft\PaythorClient\Models\Payment\Order as PaythorOrder;
+use Eticsoft\PaythorClient\Models\Payment\Payer;
+use Eticsoft\PaythorClient\Models\Payment\Shipping;
 use Magento\Sales\Api\Data\OrderInterface;
 use Paythor\SanalPosPro\Model\Config\PaymentConfig;
 use Psr\Log\LoggerInterface;
 
 class PaythorAdapter
 {
-    /**
-     * @var \Eticsoft\Sanalpospro\Client|null Lazily instantiated SDK client.
-     */
-    private $client = null;
-
     public function __construct(
         private readonly PaymentConfig $config,
         private readonly LoggerInterface $logger
@@ -33,88 +24,139 @@ class PaythorAdapter
     }
 
     /**
-     * Returns / lazily builds an authenticated SDK client.
-     *
-     * The SDK is assumed to expose:
-     *   new \Eticsoft\Sanalpospro\Client(string $apiKey, string $apiSecret, string $endpoint, bool $sandbox)
-     *   ->createPayment(array $payload): array  // returns ['iframe' => '<iframe...>', 'transaction_id' => '...']
-     *
-     * @return \Eticsoft\Sanalpospro\Client
-     * @throws \RuntimeException
+     * Verifies a webhook HMAC-SHA256 signature using the stored private key.
      */
-    private function getClient(?int $storeId = null)
+    public function verifyWebhookSignature(string $rawBody, string $providedSignature, ?int $storeId = null): bool
     {
-        if ($this->client !== null) {
-            return $this->client;
+        $secret = $this->config->getPrivateKey($storeId);
+        if ($secret === '' || $providedSignature === '') {
+            return false;
         }
-
-        $apiKey    = $this->config->getApiKey($storeId);
-        $apiSecret = $this->config->getApiSecret($storeId);
-
-        if ($apiKey === '' || $apiSecret === '') {
-            throw new \RuntimeException('Paythor SanalPos Pro credentials are not configured.');
-        }
-
-        if (!class_exists(\Eticsoft\Sanalpospro\Client::class)) {
-            throw new \RuntimeException(
-                'Eticsoft Sanalpospro SDK is not installed (vendor/Eticsoft/Sanalpospro).'
-            );
-        }
-
-        $this->client = new \Eticsoft\Sanalpospro\Client(
-            $apiKey,
-            $apiSecret,
-            $this->config->getApiEndpoint($storeId),
-            $this->config->isSandboxMode($storeId)
-        );
-
-        return $this->client;
+        $expected = hash_hmac('sha256', $rawBody, $secret);
+        return hash_equals($expected, strtolower(trim($providedSignature)));
     }
 
     /**
-     * Creates a payment session against Paythor and returns the iframe HTML.
+     * Builds an authenticated PaythorClient for the given store.
+     */
+    private function getClient(int $storeId): PaythorClient
+    {
+        $publicKey  = $this->config->getPublicKey($storeId);
+        $privateKey = $this->config->getPrivateKey($storeId);
+        $appId      = $this->config->getAppId($storeId);
+
+        if ($publicKey === '' || $privateKey === '') {
+            throw new \RuntimeException(
+                'Paythor is not connected. Please complete the Paythor setup in Admin.'
+            );
+        }
+
+        if ($appId === 0) {
+            throw new \RuntimeException(
+                'Magento App ID is not set. Please configure it in Admin -> Paythor settings.'
+            );
+        }
+
+        $client = new PaythorClient([
+            'base_url' => PaymentConfig::API_BASE_URL,
+        ]);
+
+        $client->setPublicKey($publicKey);
+        $client->setPrivateKey($privateKey);
+        $client->setProgramId(PaymentConfig::PROGRAM_ID);
+        $client->setAppId($appId);
+
+        return $client;
+    }
+
+    /**
+     * Creates a payment session and returns iframe HTML + transaction data.
      *
-     * @param OrderInterface $order
-     * @param string         $callbackUrl Fully-qualified URL Paythor will POST/GET to once
-     *                                    the customer completes 3-D Secure.
      * @return array{iframe_html:string, transaction_id:string, raw:array}
-     *
-     * @throws \RuntimeException When the SDK call fails.
+     * @throws \RuntimeException
      */
     public function createPayment(OrderInterface $order, string $callbackUrl): array
     {
         $storeId = (int)$order->getStoreId();
         $client  = $this->getClient($storeId);
+        $billing   = $order->getBillingAddress();
+        $shippingAddress = $order->getShippingAddress() ?: $billing;
+        $firstName = (string)($billing ? $billing->getFirstname() : $order->getCustomerFirstname());
+        $lastName  = (string)($billing ? $billing->getLastname()  : $order->getCustomerLastname());
 
-        $billing = $order->getBillingAddress();
+        // --- Cart ---
+        $cart = new Cart();
+        foreach ($order->getItems() as $item) {
+            if ($item->getParentItemId()) {
+                continue;
+            }
+            $cart->addItem(
+                (string)$item->getSku(),
+                (string)$item->getName(),
+                'product',
+                number_format((float)$item->getPriceInclTax(), 2, '.', ''),
+                (int)$item->getQtyOrdered()
+            );
+        }
 
-        $payload = [
-            'merchant_order_id' => (string)$order->getIncrementId(),
-            'amount'            => $this->formatAmount((float)$order->getGrandTotal()),
-            'currency'          => (string)$order->getOrderCurrencyCode(),
-            'callback_url'      => $callbackUrl,
-            'customer'          => [
-                'email'      => (string)$order->getCustomerEmail(),
-                'first_name' => (string)($billing ? $billing->getFirstname() : $order->getCustomerFirstname()),
-                'last_name'  => (string)($billing ? $billing->getLastname()  : $order->getCustomerLastname()),
-                'phone'      => $billing ? (string)$billing->getTelephone() : '',
-            ],
-            'metadata' => [
-                'magento_order_id'        => (string)$order->getEntityId(),
-                'magento_order_increment' => (string)$order->getIncrementId(),
-                'store_id'                => (string)$storeId,
-            ],
-        ];
+        $shippingAmount = (float)$order->getShippingInclTax();
+        if ($shippingAmount > 0) {
+            $cart->addItem('SHIPPING', 'Shipping', 'shipping', number_format($shippingAmount, 2, '.', ''), 1);
+        }
+
+        // Paythor requires state for credit card payments on both payer and shipping addresses.
+        $payerAddress = $this->buildPaythorAddress($billing ?: $shippingAddress);
+        $shipAddress  = $this->buildPaythorAddress($shippingAddress ?: $billing);
+
+        // --- Payer ---
+        $payer = new Payer();
+        $payer->setFirstName($firstName);
+        $payer->setLastName($lastName);
+        $payer->setEmail((string)$order->getCustomerEmail());
+        $payer->setPhone($billing ? (string)$billing->getTelephone() : '');
+        $payer->setAddress($payerAddress);
+        $payer->setIp((string)($order->getRemoteIp() ?: $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1'));
+
+        // --- Shipping ---
+        $shipping = new Shipping();
+        $shipping->setFirstName($firstName);
+        $shipping->setLastName($lastName);
+        $shipping->setPhone($shippingAddress ? (string)$shippingAddress->getTelephone() : '');
+        $shipping->setEmail((string)$order->getCustomerEmail());
+        $shipping->setAddress($shipAddress);
+
+        // --- Invoice ---
+        $invoice = new Invoice();
+        $invoice->setId((string)$order->getIncrementId());
+        $invoice->setFirstName($firstName);
+        $invoice->setLastName($lastName);
+        $invoice->setPrice(number_format((float)$order->getGrandTotal(), 2, '.', ''));
+        $invoice->setQuantity(1);
+
+        // --- Order ---
+        $orderModel = new PaythorOrder();
+        $orderModel->setCart($cart);
+        $orderModel->setShipping($shipping);
+        $orderModel->setInvoice($invoice);
+
+        // --- Create Payment ---
+        $create = new Create();
+        $create->setAmount(number_format((float)$order->getGrandTotal(), 2, '.', ''));
+        $create->setCurrency((string)$order->getOrderCurrencyCode());
+        $create->setMethod('creditcard');
+        $create->setMerchantReference((string)$order->getIncrementId());
+        $create->setReturnUrl($callbackUrl);
 
         if ($this->config->isDebugEnabled($storeId)) {
             $this->logger->info('Paythor createPayment request', [
-                'order' => $order->getIncrementId(),
-                'payload' => $this->redactPayload($payload),
+                'order'    => $order->getIncrementId(),
+                'amount'   => $order->getGrandTotal(),
+                'currency' => $order->getOrderCurrencyCode(),
             ]);
         }
 
         try {
-            $response = $client->createPayment($payload);
+            $response = $client->payment()->create($create, $payer, $orderModel);
         } catch (\Throwable $e) {
             $this->logger->error('Paythor SDK createPayment failed', [
                 'order'   => $order->getIncrementId(),
@@ -123,8 +165,30 @@ class PaythorAdapter
             throw new \RuntimeException('Paythor gateway error: ' . $e->getMessage(), 0, $e);
         }
 
-        if (!is_array($response) || empty($response['iframe'])) {
-            $this->logger->error('Paythor SDK returned malformed response', [
+        if (($response['status'] ?? '') === 'error') {
+            $details = $response['details'] ?? [];
+            $reason = is_array($details) && $details !== []
+                ? implode(' | ', array_map(static fn($item): string => (string)$item, $details))
+                : (string)($response['message'] ?? 'Unknown gateway error.');
+
+            throw new \RuntimeException('Paythor validation failed: ' . $reason);
+        }
+
+        if ($this->config->isDebugEnabled($storeId)) {
+            $this->logger->info('Paythor createPayment response', [
+                'order'    => $order->getIncrementId(),
+                'response' => $response,
+            ]);
+        }
+
+        $iframeHtml    = $this->extractIframe($response);
+        $transactionId = (string)($response['data']['transaction_id']
+            ?? $response['data']['id']
+            ?? $response['transaction_id']
+            ?? '');
+
+        if ($iframeHtml === '') {
+            $this->logger->error('Paythor returned malformed response', [
                 'order'    => $order->getIncrementId(),
                 'response' => $response,
             ]);
@@ -132,48 +196,224 @@ class PaythorAdapter
         }
 
         return [
-            'iframe_html'    => (string)$response['iframe'],
-            'transaction_id' => (string)($response['transaction_id'] ?? ''),
+            'iframe_html'    => $iframeHtml,
+            'transaction_id' => $transactionId,
             'raw'            => $response,
         ];
     }
 
-    /**
-     * Verifies a webhook HMAC-SHA256 signature using the configured secret.
-     *
-     * @param string $rawBody             Raw HTTP request body, exactly as received.
-     * @param string $providedSignature   Hex digest sent by Paythor in the X-Paythor-Signature header.
-     * @param int|null $storeId
-     */
-    public function verifyWebhookSignature(string $rawBody, string $providedSignature, ?int $storeId = null): bool
+    private function buildPaythorAddress($orderAddress): Address
     {
-        $secret = $this->config->getWebhookSecret($storeId);
-        if ($secret === '' || $providedSignature === '') {
-            return false;
+        $street = $orderAddress ? (array)$orderAddress->getStreet() : [];
+        $city   = $orderAddress ? (string)$orderAddress->getCity() : '';
+        $stateRaw = $orderAddress
+            ? (string)($orderAddress->getRegion() ?: $orderAddress->getRegionCode() ?: '')
+            : '';
+
+        $address = new Address();
+        $address->setCountry($orderAddress ? (string)$orderAddress->getCountryId() : '');
+        $address->setCity($city);
+        $address->setLine1((string)($street[0] ?? '-'));
+        $address->setPostalCode($orderAddress ? (string)$orderAddress->getPostcode() : '');
+        $address->setState($this->normalizeRequiredValue($stateRaw, $this->normalizeRequiredValue($city, '-')));
+
+        return $address;
+    }
+
+    private function normalizeRequiredValue(string $value, string $fallback): string
+    {
+        $value = trim($value);
+        return $value === '' ? $fallback : $value;
+    }
+
+    /**
+     * Extracts iframe HTML from the Paythor API response.
+     * Handles both direct iframe HTML and payment_link URL cases.
+     */
+    private function extractIframe(array $response): string
+    {
+        $data = $response['data'] ?? $response;
+
+        if (!empty($data['iframe'])) {
+            return (string)$data['iframe'];
         }
 
-        $expected = hash_hmac('sha256', $rawBody, $secret);
+        if (!empty($data['payment_link'])) {
+            $url = htmlspecialchars((string)$data['payment_link'], ENT_QUOTES);
+            return '<iframe src="' . $url . '" width="100%" height="600" frameborder="0" allowfullscreen></iframe>';
+        }
 
-        // Constant-time comparison to defeat timing attacks.
-        return hash_equals($expected, strtolower(trim($providedSignature)));
+        return '';
     }
 
     /**
-     * @param float $amount
+     * STEP 1 – Sign in with email + password.
+     * Uses MAGENTO_APP_ID (105) which is the platform-level ID for Magento on Paythor.
+     * Returns the temporary token (status=validation). OTP will be sent to the merchant's email.
+     *
+     * @return string Temporary token to pass into completeOtpAndSaveKeys()
+     * @throws \RuntimeException
      */
-    private function formatAmount(float $amount): string
+    public function initiateLogin(string $email, string $password, string $storeUrl): string
     {
-        return number_format($amount, 2, '.', '');
+        $appId = PaymentConfig::MAGENTO_APP_ID;
+        $stage = $this->config->isSandboxMode() ? 'development' : 'production';
+
+        $client = new PaythorClient(['base_url' => PaymentConfig::API_BASE_URL]);
+        $client->setProgramId(PaymentConfig::PROGRAM_ID);
+        $client->setAppId($appId);
+
+        $signIn = new \Eticsoft\PaythorClient\Models\Auth\SignIn();
+        $signIn->setEmail($email);
+        $signIn->setPassword($password);
+        $signIn->setProgramId(PaymentConfig::PROGRAM_ID);
+        $signIn->setAppId($appId);
+        $signIn->setStoreUrl($storeUrl);
+        $signIn->setStoreStage($stage);
+
+        $response = $client->auth()->signIn($signIn);
+
+        $token = $response['data']['token_string'] ?? '';
+        if ($token === '') {
+            $this->logger->warning('Paythor initiateLogin failed', [
+                'status'  => $response['status'] ?? 'unknown',
+                'message' => $response['message'] ?? 'no message',
+            ]);
+            throw new \RuntimeException(
+                'Login failed: ' . ($response['message'] ?? ($response['details'][0] ?? 'unknown error'))
+            );
+        }
+
+        $this->logger->info('Paythor initiateLogin success', [
+            'user_level'  => $response['data']['user_level'] ?? '',
+            'id_merchant' => $response['data']['id_merchant'] ?? '',
+        ]);
+
+        return $token;
     }
 
     /**
-     * Strips obviously sensitive fields before logging (defense in depth –
-     * in practice the SDK payload never contains a PAN because the card
-     * data is collected inside Paythor's iframe).
+     * STEP 2 – Verify OTP, auto-discover the Magento app ID from the platform,
+     * install app (if needed), then save API keys — all automatically.
+     *
+     * @throws \RuntimeException
      */
-    private function redactPayload(array $payload): array
+    public function completeOtpAndSaveKeys(string $tempToken, string $email, string $otp): void
     {
-        unset($payload['card'], $payload['cvv'], $payload['pan']);
-        return $payload;
+        $client = new PaythorClient(['base_url' => PaymentConfig::API_BASE_URL]);
+        $client->setProgramId(PaymentConfig::PROGRAM_ID);
+        $client->setAppId(PaymentConfig::MAGENTO_APP_ID);
+        $client->setToken($tempToken);
+
+        // 1. Verify OTP
+        $otpModel = new \Eticsoft\PaythorClient\Models\Auth\OtpVerify();
+        $otpModel->setTarget($email);
+        $otpModel->setOtp($otp);
+
+        $otpResponse = $client->auth()->otpVerify($otpModel);
+
+        if (($otpResponse['status'] ?? '') !== 'success') {
+            $this->logger->warning('Paythor OTP verify failed', [
+                'message' => $otpResponse['message'] ?? 'unknown',
+            ]);
+            throw new \RuntimeException($otpResponse['message'] ?? 'OTP verification failed.');
+        }
+
+        // Replace the temp token with the fully-authenticated token returned after OTP verify.
+        // Without this, app install and getApiKeys run under the temp-token merchant context,
+        // producing keys whose embedded merchant ID mismatches the access token at the Gateway level.
+        $authenticatedToken = $otpResponse['data']['token_string'] ?? '';
+        if ($authenticatedToken !== '') {
+            $client->setToken($authenticatedToken);
+        }
+
+        // 2. Auto-discover the Magento platform app ID from the API
+        $appId = $this->discoverMagentoAppId($client);
+
+        // Persist the discovered app ID so getAppId() returns the correct value from now on
+        $this->config->saveAppId($appId);
+        $client->setAppId($appId);
+
+        $this->logger->info('Paythor discovered Magento app ID', ['app_id' => $appId]);
+
+        // 3. Check if app is already installed for this merchant
+        $existingApp = $this->findMyApp($client, $appId);
+
+        // 4. Install app if not yet installed
+        $installResponseKeys = null;
+        if (empty($existingApp)) {
+            $install = new \Eticsoft\PaythorClient\Models\App\Install();
+            $install->setAppStage($this->config->isSandboxMode() ? 'development' : 'production');
+            $install->setParams([
+                'app_id'     => $appId,
+                'program_id' => PaymentConfig::PROGRAM_ID,
+            ]);
+            $installResponse    = $client->app()->install($appId, $install);
+            $installResponseKeys = $installResponse['data']['api_keys'] ?? null;
+            $existingApp        = $this->findMyApp($client, $appId);
+        }
+
+        if (empty($existingApp['id'])) {
+            throw new \RuntimeException('Paythor app installation failed. Contact Eticsoft support.');
+        }
+
+        // 5. Get API keys — use the install response keys when available to avoid a
+        //    secret rotation that occurs if getApiKeys is called on an existing instance,
+        //    which would cause the CDN admin's copy of the key to become stale.
+        $publicKey  = $installResponseKeys['public_key'] ?? '';
+        $privateKey = $installResponseKeys['secret_key'] ?? $installResponseKeys['private_key'] ?? '';
+
+        if ($publicKey === '' || $privateKey === '') {
+            $keysResponse = $client->app()->getApiKeys((int)$existingApp['id']);
+            $publicKey    = $keysResponse['data']['public_key'] ?? '';
+            $privateKey   = $keysResponse['data']['secret_key'] ?? $keysResponse['data']['private_key'] ?? '';
+        }
+
+        if ($publicKey === '' || $privateKey === '') {
+            throw new \RuntimeException('Paythor did not return API keys.');
+        }
+
+        // 6. Save everything automatically — no manual admin input needed
+        $this->config->saveCredentials($publicKey, $privateKey, (int)$existingApp['id']);
+
+        $this->logger->info('Paythor connected successfully', [
+            'app_id'          => $appId,
+            'app_instance_id' => $existingApp['id'],
+            'public_key_hint' => substr($publicKey, 0, 12) . '...',
+        ]);
+    }
+
+    /**
+     * Calls /app/list/all and finds the correct app ID for this Magento plugin.
+     *
+     * The Paythor platform lists app 105 as the Magento SanalPOS PRO entry.
+     * We match by name first (future-proof), then fall back to the MAGENTO_APP_ID constant.
+     */
+    private function discoverMagentoAppId(PaythorClient $client): int
+    {
+        $response = $client->app()->listAll();
+
+        $keywords = ['magento'];
+        foreach (($response['data'] ?? []) as $app) {
+            $name = strtolower((string)($app['name'] ?? ''));
+            foreach ($keywords as $kw) {
+                if (str_contains($name, $kw)) {
+                    return (int)$app['id'];
+                }
+            }
+        }
+
+        return PaymentConfig::MAGENTO_APP_ID;
+    }
+
+    private function findMyApp(PaythorClient $client, int $appId): array
+    {
+        $apps = $client->app()->listMy();
+        foreach (($apps['data'] ?? []) as $app) {
+            if ((int)($app['app_id'] ?? 0) === $appId) {
+                return $app;
+            }
+        }
+        return [];
     }
 }
