@@ -67,6 +67,12 @@
         </arguments>
     </type>
 
+    <type name="Paythor\SanalPosPro\Model\Order\PaymentStateManager">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
     <!-- ============================================================ -->
     <!-- Reusable Gateway Config virtual type bound to our method code -->
     <!-- (lets us call $config->getValue('api_key') etc. if needed).   -->

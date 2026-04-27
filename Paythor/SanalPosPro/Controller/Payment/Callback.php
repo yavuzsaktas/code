@@ -6,17 +6,18 @@
  *
  * Case A — Full-browser redirect (p_id present):
  *   Paythor navigates window.top.location to this URL after payment, appending
- *   "?p_id=<process_token>".  Since the full browser is here, postMessage to a
- *   parent frame is impossible.  We create the Magento order directly from the
- *   pending quote stored in the checkout session, then redirect to the success
- *   or failure page.
+ *   "?p_id=<process_token>".  We create the Magento order from the pending
+ *   quote, then call Paythor's process/getbytoken API to read the definitive
+ *   payment status:
+ *     - approved  → invoice created, order moves to PROCESSING, success page
+ *     - declined  → order cancelled, customer redirected back to cart
+ *     - unknown   → order left in PENDING_PAYMENT; the server webhook finalises
+ *                   it asynchronously (fallback for transient API errors)
  *
  * Case B — postMessage bridge (no p_id):
- *   The iframe itself was redirected here (no top-level navigation).  We render
- *   a tiny HTML page whose <script> calls window.parent.postMessage so that
- *   sanalpospro-method.js can close the modal and redirect the customer.
- *   This path is a fallback — Paythor may not use it, but we keep it for
- *   forward-compatibility.
+ *   The iframe itself was redirected here.  We render a tiny HTML page whose
+ *   <script> calls window.parent.postMessage so that sanalpospro-method.js
+ *   can close the modal and redirect the customer.
  *
  * No CSRF token is required: this is a GET-only browser-return URL.
  * Order creation is authenticated by the server-side checkout session
@@ -35,12 +36,15 @@ use Magento\Framework\App\ResponseInterface;
 use Magento\Framework\Controller\Result\RawFactory;
 use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\Framework\Controller\ResultInterface;
+use Magento\Framework\Message\ManagerInterface as MessageManager;
 use Magento\Framework\UrlInterface;
 use Magento\Quote\Api\CartManagementInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Sales\Api\OrderRepositoryInterface;
 use Magento\Sales\Model\Order;
+use Paythor\SanalPosPro\Model\Api\PaythorAdapter;
 use Paythor\SanalPosPro\Model\Config\PaymentConfig;
+use Paythor\SanalPosPro\Model\Order\PaymentStateManager;
 use Psr\Log\LoggerInterface;
 
 class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
@@ -54,6 +58,9 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
         private readonly CartManagementInterface $cartManagement,
         private readonly OrderRepositoryInterface $orderRepository,
         private readonly PaymentConfig $paymentConfig,
+        private readonly PaythorAdapter $paythorAdapter,
+        private readonly PaymentStateManager $paymentStateManager,
+        private readonly MessageManager $messageManager,
         private readonly UrlInterface $urlBuilder,
         private readonly LoggerInterface $logger
     ) {
@@ -81,17 +88,14 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
         }
 
         if ($p_id !== '') {
-            // Case A: Paythor navigated the full browser here with a process token.
             return $this->handleFullBrowserRedirect($p_id);
         }
 
-        // Case B: postMessage bridge (iframe redirect without p_id).
         return $this->handlePostMessageBridge();
     }
 
     /**
      * Extract p_id from malformed or standard callback URLs.
-     * Supports both '?p_id=...' and '&p_id=...' styles.
      */
     private function extractProcessTokenFromRequestUri(string $requestUri): string
     {
@@ -108,7 +112,13 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
 
     /**
      * Case A — Paythor used window.top.location redirect.
-     * Create the order from session and redirect to success/cart.
+     *
+     * Flow:
+     *  1. Create Magento order from pending quote.
+     *  2. Call process/getbytoken to get the real payment status.
+     *  3a. Approved  → markPaid (invoice + PROCESSING) → success page.
+     *  3b. Declined  → markFailed (cancel) → cart page with error message.
+     *  3c. Unknown   → leave PENDING_PAYMENT → success page (webhook finalises).
      */
     private function handleFullBrowserRedirect(string $processToken): ResultInterface
     {
@@ -133,26 +143,23 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
                 return $redirect->setPath('checkout/cart');
             }
 
-            // Convert quote → order (the cart is still active up to this point).
+            // -- 1. Convert quote → order (cart is still active up to this point) --
             $orderId = $this->cartManagement->placeOrder((int)$quote->getId());
             /** @var Order $order */
             $order = $this->orderRepository->get((int)$orderId);
 
-            $order->setState(Order::STATE_PENDING_PAYMENT)
-                  ->setStatus($this->paymentConfig->getNewOrderStatus() ?: Order::STATE_PENDING_PAYMENT)
-                  ->addCommentToStatusHistory(
-                      __('Paythor: browser-redirect callback received (p_id). Awaiting server webhook.')
-                  );
-
-            // Store both the quote reference and the process token so the webhook
-            // can find this order by quote_id and optionally log the process token.
+            // Store the process token so the webhook can cross-reference it if needed.
             $order->getPayment()
                   ->setAdditionalInformation('paythor_quote_reference', (string)$pendingQuoteId)
                   ->setAdditionalInformation('paythor_process_token', $processToken);
 
+            $order->setState(Order::STATE_PENDING_PAYMENT)
+                  ->setStatus($this->paymentConfig->getNewOrderStatus() ?: Order::STATE_PENDING_PAYMENT);
+
             $this->orderRepository->save($order);
 
-            // Update checkout session so the success page renders correctly.
+            // Update checkout session so the success page renders correctly
+            // regardless of the payment status outcome below.
             $this->checkoutSession->unsPaythorPendingQuoteId();
             $this->checkoutSession
                 ->setLastQuoteId($quote->getId())
@@ -161,15 +168,65 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
                 ->setLastRealOrderId($order->getIncrementId())
                 ->setLastOrderStatus($order->getStatus());
 
-            $this->logger->info('Paythor Callback: order created via browser redirect', [
-                'quote_id' => $pendingQuoteId,
+            $this->logger->info('Paythor Callback: order created, verifying payment status', [
+                'quote_id'      => $pendingQuoteId,
+                'order_id'      => $order->getIncrementId(),
+                'process_token' => substr($processToken, 0, 16) . '...',
+            ]);
+
+            // -- 2. Query Paythor for the definitive payment status --
+            $storeId       = (int)$order->getStoreId();
+            $processResult = $this->paythorAdapter->getProcessStatus($processToken, $storeId);
+
+            // -- 3a. Payment approved → create invoice, move to PROCESSING --
+            if ($processResult['is_approved']) {
+                $this->paymentStateManager->markPaid($order, $processResult['transaction_id']);
+
+                $this->logger->info('Paythor Callback: payment approved via getByToken', [
+                    'order_id'       => $order->getIncrementId(),
+                    'transaction_id' => $processResult['transaction_id'],
+                ]);
+
+                return $redirect->setPath('checkout/onepage/success');
+            }
+
+            // -- 3b. Payment definitively declined → cancel order, back to cart --
+            if ($processResult['is_failed']) {
+                $reason = (string)($processResult['raw']['data']['message']
+                    ?? $processResult['raw']['message']
+                    ?? $processResult['status']);
+
+                $this->paymentStateManager->markFailed($order, $reason);
+
+                $this->logger->info('Paythor Callback: payment declined via getByToken', [
+                    'order_id' => $order->getIncrementId(),
+                    'reason'   => $reason,
+                ]);
+
+                $this->messageManager->addErrorMessage(
+                    __('Your payment was declined. Please try again or use a different payment method.')
+                );
+
+                return $redirect->setPath('checkout/cart');
+            }
+
+            // -- 3c. Status unknown (pending or API error) --
+            // Keep the order in PENDING_PAYMENT; the server webhook will finalise it.
+            // The customer still sees the success page — the order exists and is real.
+            $order->addCommentToStatusHistory(
+                __('Paythor: browser-redirect callback received. Awaiting server webhook for final confirmation. (process status: %1)', $processResult['status'])
+            );
+            $this->orderRepository->save($order);
+
+            $this->logger->info('Paythor Callback: payment status indeterminate, awaiting webhook', [
                 'order_id' => $order->getIncrementId(),
+                'status'   => $processResult['status'],
             ]);
 
             return $redirect->setPath('checkout/onepage/success');
 
         } catch (\Throwable $e) {
-            $this->logger->error('Paythor Callback: full-browser confirm failed', [
+            $this->logger->error('Paythor Callback: full-browser redirect handling failed', [
                 'process_token' => substr($processToken, 0, 16) . '...',
                 'message'       => $e->getMessage(),
                 'trace'         => $e->getTraceAsString(),
@@ -195,7 +252,6 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
             'reference' => $ref,
         ]);
 
-        // 'reference' carries the quote_id (merchantReference set in Create.php).
         $payload = [
             'source'    => 'paythor_sanalpospro',
             'status'    => $status,

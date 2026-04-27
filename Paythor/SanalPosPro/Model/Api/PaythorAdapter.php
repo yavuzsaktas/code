@@ -444,6 +444,67 @@ class PaythorAdapter
     }
 
     /**
+     * Queries the Paythor process endpoint for the real-time status of a
+     * payment process token (the p_id received in the browser callback URL).
+     *
+     * Called synchronously from Callback.php so the order can be finalised
+     * immediately, before the asynchronous server webhook arrives.
+     *
+     * Never throws: on any network or API error it returns is_approved=false
+     * with status='unknown', so the caller falls back to PENDING_PAYMENT and
+     * lets the webhook handle finalisation.
+     *
+     * @return array{is_approved:bool, is_failed:bool, status:string, transaction_id:string, raw:array}
+     */
+    public function getProcessStatus(string $processToken, int $storeId = 0): array
+    {
+        $unknown = [
+            'is_approved'    => false,
+            'is_failed'      => false,
+            'status'         => 'unknown',
+            'transaction_id' => '',
+            'raw'            => [],
+        ];
+
+        try {
+            $client   = $this->getClient($storeId);
+            $response = $client->process()->getByToken($processToken);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Paythor getProcessStatus: API call failed', [
+                'token'   => substr($processToken, 0, 16) . '...',
+                'message' => $e->getMessage(),
+            ]);
+            return $unknown;
+        }
+
+        // The API may nest status inside 'data' or return it at the root level.
+        $data          = $response['data'] ?? $response;
+        $rawStatus     = strtolower(trim((string)($data['status'] ?? $response['status'] ?? '')));
+        $transactionId = (string)($data['transaction_id'] ?? $data['id'] ?? $response['transaction_id'] ?? '');
+
+        $isApproved = in_array($rawStatus, ['success', 'paid', 'authorized', 'captured', 'approved'], true);
+        $isFailed   = in_array($rawStatus, ['failed', 'failure', 'declined', 'cancelled', 'canceled'], true);
+
+        if ($this->config->isDebugEnabled($storeId)) {
+            $this->logger->info('Paythor getProcessStatus result', [
+                'token'          => substr($processToken, 0, 16) . '...',
+                'status'         => $rawStatus,
+                'is_approved'    => $isApproved,
+                'is_failed'      => $isFailed,
+                'transaction_id' => $transactionId,
+            ]);
+        }
+
+        return [
+            'is_approved'    => $isApproved,
+            'is_failed'      => $isFailed,
+            'status'         => $rawStatus,
+            'transaction_id' => $transactionId,
+            'raw'            => $response,
+        ];
+    }
+
+    /**
      * STEP 1 – Sign in with email + password.
      * Uses MAGENTO_APP_ID (105) which is the platform-level ID for Magento on Paythor.
      * Returns the temporary token (status=validation). OTP will be sent to the merchant's email.
