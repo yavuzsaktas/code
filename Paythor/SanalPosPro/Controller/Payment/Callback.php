@@ -35,6 +35,7 @@ use Magento\Framework\App\ResponseInterface;
 use Magento\Framework\Controller\Result\RawFactory;
 use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\Framework\Controller\ResultInterface;
+use Magento\Framework\UrlInterface;
 use Magento\Quote\Api\CartManagementInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Sales\Api\OrderRepositoryInterface;
@@ -53,6 +54,7 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
         private readonly CartManagementInterface $cartManagement,
         private readonly OrderRepositoryInterface $orderRepository,
         private readonly PaymentConfig $paymentConfig,
+        private readonly UrlInterface $urlBuilder,
         private readonly LoggerInterface $logger
     ) {
     }
@@ -201,10 +203,12 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
             'message'   => $message,
         ];
 
-        $json = json_encode(
-            $payload,
-            JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
-        );
+        $successUrl = $this->urlBuilder->getUrl('checkout/onepage/success', ['_secure' => true]);
+        $failureUrl = $this->urlBuilder->getUrl('checkout/cart', ['_secure' => true]);
+
+        $json           = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        $successUrlJson = json_encode($successUrl, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        $failureUrlJson = json_encode($failureUrl, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 
         $html = <<<HTML
 <!DOCTYPE html>
@@ -217,13 +221,46 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
 <body>
 <script>
     (function () {
+        var payload = {$json};
+        var successUrl = {$successUrlJson};
+        var failureUrl = {$failureUrlJson};
+
+        var targetUrl = payload.status === 'success' ? successUrl : failureUrl;
+
+        function redirectTopLevel() {
+            window.location.replace(targetUrl);
+        }
+
         try {
-            var payload = {$json};
+            var posted = false;
+
             if (window.parent && window.parent !== window) {
                 window.parent.postMessage(payload, window.location.origin);
+                posted = true;
+            }
+
+            if (window.opener && window.opener !== window && !window.opener.closed) {
+                window.opener.postMessage(payload, window.location.origin);
+                posted = true;
+
+                try {
+                    window.close();
+                } catch (closeErr) {
+                    // Some browsers block window.close().
+                }
+
+                window.setTimeout(function () {
+                    if (!window.closed) {
+                        redirectTopLevel();
+                    }
+                }, 400);
+            }
+
+            if (!posted) {
+                redirectTopLevel();
             }
         } catch (e) {
-            // Swallow — parent will time out and surface a generic error.
+            redirectTopLevel();
         }
     })();
 </script>
