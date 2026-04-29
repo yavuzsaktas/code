@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <head>
+        <css src="Paythor_SanalPosPro::css/installment-modern.css"/>
+        <css src="Paythor_SanalPosPro::css/installment-classic.css"/>
+        <script src="Paythor_SanalPosPro::js/installment-modern.js"/>
+    </head>
+    <body>
+        <!--
+            Classic 1column / 2columns-left layouts: register as a "detailed_info"
+            tab so it sits next to "Details" and "Reviews".
+        -->
+        <referenceBlock name="product.info.details">
+            <block class="Paythor\SanalPosPro\Block\Product\Installments"
+                   name="paythor.installments.tab"
+                   as="paythor_installments"
+                   template="Paythor_SanalPosPro::product/installments.phtml"
+                   group="detailed_info">
+                <arguments>
+                    <argument name="title" translate="true" xsi:type="string">Installments</argument>
+                    <argument name="sort_order" xsi:type="string">40</argument>
+                    <argument name="modern_template" xsi:type="string">Paythor_SanalPosPro::product/installments.phtml</argument>
+                    <argument name="classic_template" xsi:type="string">Paythor_SanalPosPro::product/installments_classic.phtml</argument>
+                </arguments>
+            </block>
+        </referenceBlock>
+
+        <!--
+            Page Builder's `product-full-width` page layout moves every tab
+            child out of `product.info.details`, leaving the in-tab block
+            invisible. Render a parallel section inside the dedicated
+            details-after wrapper Page Builder creates (same area that
+            holds the Reviews section), so it stays in the correct column
+            instead of bleeding into the product image area.
+        -->
+        <referenceContainer name="product.info.details.after.wrapper.main">
+            <block class="Paythor\SanalPosPro\Block\Product\Installments"
+                   name="paythor.installments.section"
+                   template="Paythor_SanalPosPro::product/installments_section.phtml"
+                   before="product.reviews.wrapper">
+                <arguments>
+                    <argument name="modern_template" xsi:type="string">Paythor_SanalPosPro::product/installments_section.phtml</argument>
+                    <argument name="classic_template" xsi:type="string">Paythor_SanalPosPro::product/installments_section_classic.phtml</argument>
+                </arguments>
+            </block>
+        </referenceContainer>
+    </body>
+</page>

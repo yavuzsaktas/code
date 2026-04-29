@@ -1,0 +1,129 @@
+/**
+ * SanalPosPRO Classic Installment Theme — Magento port
+ * Mirrors the WC plugin's installment-classic.css with class selectors
+ * (instead of data attributes) so it integrates with Luma cleanly.
+ */
+
+.sppro-classic-wrapper {
+    font-family: Arial, Helvetica, sans-serif;
+    width: 100%;
+    max-width: 100%;
+    padding: 10px;
+    background-color: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    font-size: 15px;
+    box-sizing: border-box;
+}
+
+.sppro-classic-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 20px;
+    justify-content: center;
+}
+
+.sppro-classic-card {
+    flex: 1 1 calc(33.333% - 10px);
+    min-width: 300px;
+    max-width: 380px;
+    background-color: #fff;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    border: 1px solid #f0f0f0;
+}
+
+.sppro-classic-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+}
+
+.sppro-classic-card-head {
+    padding: 14px;
+    background-color: #f7f9fc;
+    border-bottom: 1px solid #eaedf3;
+    text-align: center;
+}
+
+.sppro-classic-card-head .sppro-card-image {
+    max-width: 100%;
+    max-height: 50px;
+    margin: 0 auto;
+    display: inline-block;
+}
+
+.sppro-classic-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    table-layout: fixed;
+}
+
+.sppro-classic-table th,
+.sppro-classic-table td {
+    padding: 10px 12px;
+    text-align: center;
+    border-bottom: 1px solid #eaedf3;
+    color: #3a3f51;
+    width: 33.333%;
+}
+
+.sppro-classic-table th {
+    font-weight: 600;
+    background-color: #fcfdff;
+}
+
+.sppro-classic-table tr:last-child td {
+    border-bottom: none;
+}
+
+.sppro-classic-table tr:hover td {
+    background-color: #f7f9fc;
+}
+
+.sppro-classic-row-empty td {
+    color: #9ba3b3;
+}
+
+.sppro-classic-note {
+    background: #f7f9fc;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #5a6171;
+    border: 1px solid #eaedf3;
+    margin-top: 15px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.sppro-classic-note p {
+    margin: 0;
+}
+
+@media (max-width: 992px) {
+    .sppro-classic-card {
+        flex: 1 1 calc(50% - 20px);
+        min-width: 280px;
+        max-width: 480px;
+    }
+}
+
+@media (max-width: 768px) {
+    .sppro-classic-wrapper {
+        padding: 12px;
+        border-radius: 8px;
+    }
+    .sppro-classic-card {
+        flex: 1 1 100%;
+        min-width: 100%;
+    }
+    .sppro-classic-table th,
+    .sppro-classic-table td {
+        padding: 8px;
+        font-size: 13px;
+    }
+}

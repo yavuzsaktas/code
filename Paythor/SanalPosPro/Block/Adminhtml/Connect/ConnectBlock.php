@@ -5,6 +5,7 @@ namespace Paythor\SanalPosPro\Block\Adminhtml\Connect;
 
 use Magento\Backend\Block\Template;
 use Magento\Backend\Block\Template\Context;
+use Magento\Framework\App\ResourceConnection;
 use Magento\Sales\Model\ResourceModel\Order\Status\CollectionFactory as StatusCollectionFactory;
 use Paythor\SanalPosPro\Model\Config\PaymentConfig;
 
@@ -14,6 +15,7 @@ class ConnectBlock extends Template
         Context $context,
         private readonly PaymentConfig $paymentConfig,
         private readonly StatusCollectionFactory $statusCollectionFactory,
+        private readonly ResourceConnection $resource,
         array $data = []
     ) {
         parent::__construct($context, $data);
@@ -47,5 +49,26 @@ class ConnectBlock extends Template
     public function getPaymentConfig(): PaymentConfig
     {
         return $this->paymentConfig;
+    }
+
+    /**
+     * Read a setting saved by the React UI via IAPI (lowercase config key,
+     * e.g. `showinstallmentstabs`, `currency_convert`, `paymentpagetheme`).
+     *
+     * Bypasses the config cache so the value reflects the latest save —
+     * fixes the toggle flipping back to the default after a page reload.
+     */
+    public function getModuleSetting(string $key, string $default = ''): string
+    {
+        $connection = $this->resource->getConnection();
+        $value = $connection->fetchOne(
+            $connection->select()
+                ->from($this->resource->getTableName('core_config_data'), 'value')
+                ->where('path = ?', 'payment/paythor_sanalpospro/' . strtolower($key))
+                ->where('scope = ?', 'default')
+                ->where('scope_id = ?', 0)
+        );
+        $value = trim((string)($value ?? ''));
+        return $value !== '' ? $value : $default;
     }
 }

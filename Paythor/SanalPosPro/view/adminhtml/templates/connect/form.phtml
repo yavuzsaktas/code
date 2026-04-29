@@ -46,7 +46,7 @@ window.style_url  = 'https://cdn.paythor.com/1/105/10.0.4/index.css';
 
   window.generalSettings = {
     order_status: {
-      default_value: '<?= $block->escapeJs($config->getNewOrderStatus()) ?>',
+      default_value: '<?= $block->escapeJs($block->getModuleSetting('order_status', $config->getNewOrderStatus())) ?>',
       options: {
         <?php foreach ($statuses as $code => $label): ?>
         '<?= $block->escapeJs($code) ?>': '<?= $block->escapeJs($label) ?>',
@@ -54,15 +54,15 @@ window.style_url  = 'https://cdn.paythor.com/1/105/10.0.4/index.css';
       }
     },
     currency_convert: {
-      default_value: 'no',
+      default_value: '<?= $block->escapeJs($block->getModuleSetting('currency_convert', 'no')) ?>',
       options: { yes: 'Yes', no: 'No' }
     },
     showInstallmentsTabs: {
-      default_value: 'no',
+      default_value: '<?= $block->escapeJs($block->getModuleSetting('showinstallmentstabs', 'no')) ?>',
       options: { yes: 'Yes', no: 'No' }
     },
     paymentPageTheme: {
-      default_value: 'modern',
+      default_value: '<?= $block->escapeJs($block->getModuleSetting('paymentpagetheme', 'modern')) ?>',
       options: { classic: 'Classic', modern: 'Modern' }
     }
   };

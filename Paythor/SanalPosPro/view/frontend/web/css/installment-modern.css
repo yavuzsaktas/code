@@ -1,0 +1,359 @@
+/**
+ * SanalPosPRO Modern Installment Theme Styles
+ */
+
+/* Sibling-section tab nav (Reviews / Installments). */
+.paythor-section-tabs {
+    display: flex;
+    gap: 0;
+    margin: 0 0 20px;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.paythor-section-tab {
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    padding: 12px 20px;
+    font-size: 18px;
+    font-weight: 500;
+    color: #6c7280;
+    cursor: pointer;
+    transition: color 0.2s ease, border-color 0.2s ease;
+    font-family: inherit;
+}
+
+.paythor-section-tab:hover {
+    color: #3a3f51;
+}
+
+.paythor-section-tab.active {
+    color: #4a6cf7;
+    border-bottom-color: #4a6cf7;
+    font-weight: 600;
+}
+
+:root {
+    /* Color Variables */
+    --sppro-primary: #4a6cf7;
+    --sppro-primary-light: rgba(74, 108, 247, 0.25);
+    --sppro-border-light: #eaedf3;
+    --sppro-border-medium: #dce0e8;
+    --sppro-border-dark: #adb5bd;
+    --sppro-bg-light: #f7f9fc;
+    --sppro-bg-white: #ffffff;
+    --sppro-text-dark: #3a3f51;
+    --sppro-text-medium: #5a6171;
+    --sppro-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+    --sppro-shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1);
+    --sppro-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --sppro-danger-bg: #fff2f2;
+    --sppro-danger-border: #fed7d7;
+    --sppro-danger-text: #e53e3e;
+}
+
+/* Main Container */
+.sppro-installment-container {
+    font-family: Arial, Helvetica, sans-serif;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin: 0 0 20px;
+    padding: 20px;
+    background-color: var(--sppro-bg-white);
+    border-radius: 12px;
+    box-shadow: var(--sppro-shadow-lg);
+    font-size: 14px;
+}
+
+.sppro-installment-title {
+    margin: 0 0 16px;
+    padding: 0 0 10px;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--sppro-text-dark);
+    border-bottom: 1px solid var(--sppro-border-light);
+}
+
+/* Tabs Navigation */
+.sppro-installment-tabs {
+    margin-bottom: 15px;
+}
+
+.sppro-tab-header {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #e9ecef;
+    padding-bottom: 6px;
+}
+
+.sppro-tab-item {
+    padding: 8px 12px;
+    text-align: center;
+    background-color: var(--sppro-bg-white);
+    border: 1px solid var(--sppro-border-medium);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 13px;
+}
+
+.sppro-tab-item:hover {
+    border-color: var(--sppro-border-dark);
+    transform: translateY(-2px);
+}
+
+.sppro-tab-item.active {
+    border-color: var(--sppro-primary);
+    box-shadow: 0 0 0 2px var(--sppro-primary-light);
+}
+
+.sppro-tab-item img,
+.sppro-tab-item .sppro-card-image {
+    max-height: 32px;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+    display: inline-block;
+    object-fit: contain;
+}
+
+/* Tab Content */
+.sppro-tab-content {
+    background-color: var(--sppro-bg-white);
+    border-radius: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: center;
+}
+
+.sppro-tab-pane {
+    display: none;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 15px;
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid #f0f0f0;
+    border-radius: 10px;
+    box-shadow: var(--sppro-shadow-sm);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    overflow-x: auto;
+}
+
+.sppro-tab-pane:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--sppro-shadow-md);
+}
+
+.sppro-tab-pane.active {
+    display: block;
+}
+
+/* Installment Table */
+.sppro-installment-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    table-layout: fixed;
+}
+
+.sppro-installment-table th,
+.sppro-installment-table td {
+    padding: 10px 12px;
+    text-align: center;
+    border-bottom: 1px solid var(--sppro-border-light);
+    color: var(--sppro-text-dark);
+    word-break: normal;
+    white-space: nowrap;
+}
+
+.sppro-installment-table th {
+    background-color: var(--sppro-bg-light);
+    font-weight: 600;
+    color: var(--sppro-text-dark);
+}
+
+.sppro-installment-table th:first-child,
+.sppro-installment-table th:nth-child(2),
+.sppro-installment-table th:nth-child(3) {
+    width: 33.333%;
+    text-align: center;
+    white-space: normal;
+    padding: 10px;
+}
+
+.sppro-installment-table td:first-child {
+    text-align: center;
+}
+
+.sppro-installment-table td:nth-child(2),
+.sppro-installment-table td:nth-child(3) {
+    text-align: center;
+    font-family: inherit;
+    font-size: 13px;
+    padding: 10px;
+}
+
+.sppro-installment-table tr:last-child td {
+    border-bottom: none;
+}
+
+.sppro-installment-table tr:hover td {
+    background-color: var(--sppro-bg-light);
+}
+
+.sppro-installment-note {
+    margin-top: 15px;
+    font-size: 13px;
+    color: var(--sppro-text-medium);
+    background: var(--sppro-bg-light);
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--sppro-border-light);
+    line-height: 1.5;
+}
+
+/* Logo Wrapper */
+.sanalpospro-logo-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-bottom: 20px;
+    justify-content: center;
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 0 10px;
+}
+
+.sanalpospro-logo-wrapper div {
+    flex: 0 0 calc(25% - 15px);
+    min-width: 120px;
+    border: 1px solid var(--sppro-border-light);
+    border-radius: 8px;
+    padding: 10px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-bottom: 5px;
+}
+
+.sanalpospro-logo-wrapper div img {
+    max-height: 40px;
+    max-width: 100%;
+    display: block;
+    margin: 0 auto;
+    object-fit: contain;
+}
+
+.sanalpospro-logo-wrapper div:hover {
+    border-color: var(--sppro-primary);
+    box-shadow: var(--sppro-shadow-md);
+    transform: translateY(-3px);
+}
+
+/* Card Wrappers */
+.sanalpospro-installment-card-wrapper-active {
+    display: block;
+}
+
+.sanalpospro-installment-card-wrapper-inactive {
+    display: none;
+}
+
+.sanalpospro-card-family-wrapper-active {
+    border: 1px solid var(--sppro-primary);
+    background-color: var(--sppro-bg-light);
+    box-shadow: var(--sppro-shadow-md);
+}
+
+.sanalpospro-card-family-wrapper-inactive {
+    border: 1px solid var(--sppro-border-light);
+}
+
+/* Alert Messages */
+.sanalpospro-installment-message-alert {
+    background-color: var(--sppro-danger-bg);
+    color: var(--sppro-danger-text);
+    font-weight: 600;
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--sppro-danger-border);
+}
+
+/* Responsive Styles */
+@media (max-width: 992px) {
+    .sppro-tab-pane {
+        flex: 1 1 calc(50% - 20px);
+    }
+    
+    .sanalpospro-logo-wrapper div {
+        flex: 0 0 calc(25% - 15px);
+    }
+}
+
+@media (max-width: 768px) {
+
+    .sppro-tab-header {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .sppro-installment-container {
+        padding: 15px;
+        font-size: 14px;
+        max-width: 100%;
+    }
+    
+    .sppro-tab-item {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+    
+    .sppro-tab-pane {
+        flex: 1 1 100%;
+        min-width: 100%;
+        padding: 12px;
+    }
+    
+    .sppro-installment-table th,
+    .sppro-installment-table td {
+        padding: 8px;
+        font-size: 13px;
+    }
+    
+    .sanalpospro-logo-wrapper {
+        gap: 10px;
+    }
+    
+    .sanalpospro-logo-wrapper div {
+        flex: 0 0 calc(33.333% - 10px);
+        min-width: 100px;
+        height: 45px;
+        padding: 8px;
+    }
+    
+    .sanalpospro-logo-wrapper div img {
+        max-height: 35px;
+    }
+}
+
+@media (max-width: 576px) {
+    .sanalpospro-logo-wrapper div {
+        flex: 0 0 calc(50% - 10px);
+        min-width: 120px;
+    }
+
+    .sppro-tab-header {
+        grid-template-columns: 1fr;
+    }
+}

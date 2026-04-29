@@ -108,6 +108,12 @@ class Handler
 
         $this->configWriter->save('payment/paythor_sanalpospro/installments', json_encode($options));
 
+        // Invalidate config + full-page cache so the product-page installment
+        // table reflects the new plan on the very next request (otherwise the
+        // cached HTML keeps showing the previous values).
+        $this->cacheTypeList->cleanType('config');
+        $this->cacheTypeList->cleanType('full_page');
+
         return $this->success('Installment options updated.');
     }
 
@@ -118,15 +124,35 @@ class Handler
             return $this->error('No settings provided.');
         }
 
-        $allowed = ['order_status', 'currency_convert', 'showinstallmentstabs', 'paymentpagetheme'];
+        // Allowed keys mapped from camelCase (sent by React UI) to lowercase config paths.
+        $allowedMap = [
+            'order_status'        => 'order_status',
+            'currency_convert'    => 'currency_convert',
+            'showinstallmentstabs' => 'showinstallmentstabs',
+            'paymentpagetheme'    => 'paymentpagetheme',
+        ];
+
+        $updated = [];
         foreach ($settings as $key => $value) {
             $normalized = strtolower((string)$key);
-            if (in_array($normalized, $allowed, true)) {
-                $this->configWriter->save('payment/paythor_sanalpospro/' . $normalized, $value);
+            if (isset($allowedMap[$normalized])) {
+                $this->configWriter->save(
+                    'payment/paythor_sanalpospro/' . $allowedMap[$normalized],
+                    (string)$value
+                );
+                // Echo the value back using the ORIGINAL key the UI sent so React state stays in sync.
+                $updated[$key] = $value;
             }
         }
 
-        return $this->success('Settings updated.');
+        // Flush config cache so the new values are visible on the next request (frontend product page).
+        $this->cacheTypeList->cleanType('config');
+        $this->cacheTypeList->cleanType('full_page');
+        foreach ($this->cacheFrontendPool as $cacheFrontend) {
+            $cacheFrontend->getBackend()->clean();
+        }
+
+        return $this->success('Module settings updated', ['updated_settings' => $updated]);
     }
 
     private function actionGetMerchantInfo(array $params): array
@@ -175,11 +201,28 @@ class Handler
 
     private function success(string $message, array $data = []): array
     {
-        return ['status' => 'success', 'message' => $message, 'data' => $data];
+        return [
+            'status'  => 'success',
+            'message' => $message,
+            'data'    => $data,
+            'details' => [],
+            'meta'    => [
+                'xfvv'  => substr($this->paymentConfig->getXfvv(), 0, 10),
+                'nonce' => null,
+            ],
+        ];
     }
 
     private function error(string $message): array
     {
-        return ['status' => 'error', 'message' => $message];
+        return [
+            'status'  => 'error',
+            'message' => $message,
+            'details' => [],
+            'meta'    => [
+                'xfvv'  => substr($this->paymentConfig->getXfvv(), 0, 10),
+                'nonce' => null,
+            ],
+        ];
     }
 }

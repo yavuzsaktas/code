@@ -1,0 +1,66 @@
+<?php
+/**
+ * SanalPosPro Classic theme — full-width section wrapper variant.
+ *
+ * Same body as installments_classic.phtml but framed inside the dedicated
+ * `product-full-width-section` so it sits in the Page Builder "Reviews"
+ * area with a heading.
+ *
+ * @var \Paythor\SanalPosPro\Block\Product\Installments $block
+ */
+
+if (!$block->isEnabled()) {
+    return;
+}
+
+$activeFamilies = $block->getActiveCardFamilies();
+if (empty($activeFamilies)) {
+    return;
+}
+?>
+<div class="product-full-width-section paythor-installments-section" id="paythor-installments">
+    <h2 class="product-section-title sppro-installment-title"><?= $block->escapeHtml(__('Installments')) ?></h2>
+
+    <div class="sppro-classic-wrapper" data-sanalpospro-wrapper>
+        <div class="sppro-classic-container" data-sanalpospro-container>
+            <?php foreach ($activeFamilies as $cardKey):
+                $rows = $block->getFamilyRowsAll($cardKey);
+            ?>
+                <div class="sppro-classic-card" data-sanalpospro-card>
+                    <table class="sppro-classic-table" data-sanalpospro-table>
+                        <thead>
+                            <tr>
+                                <td colspan="3" class="sppro-classic-card-head">
+                                    <img src="<?= $block->escapeUrl($block->getCardImageUrl($cardKey)) ?>"
+                                         alt="<?= $block->escapeHtmlAttr($cardKey) ?>"
+                                         class="sppro-card-image">
+                                </td>
+                            </tr>
+                            <tr>
+                                <th><?= $block->escapeHtml(__('Installment')) ?></th>
+                                <th><?= $block->escapeHtml(__('Monthly Pay.')) ?></th>
+                                <th><?= $block->escapeHtml(__('Total Amount')) ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($rows as $row):
+                                $months = (int)$row['months'];
+                                $label  = sprintf(__('%d Installment'), $months);
+                            ?>
+                                <tr<?= $row['active'] ? '' : ' class="sppro-classic-row-empty"' ?>>
+                                    <td><?= $block->escapeHtml($label) ?></td>
+                                    <td><?= $row['active'] ? /* @noEscape */ $row['monthly'] : '-' ?></td>
+                                    <td><?= $row['active'] ? /* @noEscape */ $row['total']   : '-' ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="sppro-classic-note" data-sanalpospro-note>
+            <p><?= $block->escapeHtml(__('Installment amounts are estimated and may vary depending on the bank\'s campaigns and interest rates.')) ?></p>
+        </div>
+    </div>
+</div>
