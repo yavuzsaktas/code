@@ -40,7 +40,9 @@ use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Api\Data\CartInterface;
 use Magento\Sales\Api\OrderRepositoryInterface;
 use Magento\Sales\Model\Order;
+use Paythor\SanalPosPro\Model\Api\PaythorAdapter;
 use Paythor\SanalPosPro\Model\Config\PaymentConfig;
+use Paythor\SanalPosPro\Model\Order\PaymentStateManager;
 use Psr\Log\LoggerInterface;
 
 class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
@@ -54,6 +56,8 @@ class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
         private readonly CartManagementInterface $cartManagement,
         private readonly OrderRepositoryInterface $orderRepository,
         private readonly PaymentConfig $paymentConfig,
+        private readonly PaythorAdapter $paythorAdapter,
+        private readonly PaymentStateManager $paymentStateManager,
         private readonly UrlInterface $urlBuilder,
         private readonly LoggerInterface $logger
     ) {
@@ -74,6 +78,7 @@ class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
         try {
             // -- 2. Validate reference against session ------------------------
             $reference = trim((string)$this->request->getParam('reference', ''));
+            $processId = trim((string)$this->request->getParam('process_id', ''));
 
             if ($reference === '' || !ctype_digit($reference)) {
                 throw new LocalizedException(__('Invalid payment reference.'));
@@ -102,15 +107,53 @@ class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
             $order = $this->orderRepository->get((int)$orderId);
 
             $order->setState(Order::STATE_PENDING_PAYMENT)
-                  ->setStatus($this->paymentConfig->getNewOrderStatus() ?: Order::STATE_PENDING_PAYMENT)
-                  ->addCommentToStatusHistory(__('Paythor payment confirmed by browser. Awaiting server webhook.'));
+                  ->setStatus($this->paymentConfig->getNewOrderStatus() ?: Order::STATE_PENDING_PAYMENT);
 
-            // Store the quote_id so Notify.php (webhook) can find this order
-            // when merchant_order_id from Paythor equals the original quote_id.
+            // Store quote_id so Notify.php (webhook) can find this order.
             $order->getPayment()
                   ->setAdditionalInformation('paythor_quote_reference', (string)$pendingQuoteId);
 
+            if ($processId !== '') {
+                $order->getPayment()->setAdditionalInformation('paythor_process_token', $processId);
+            }
+
             $this->orderRepository->save($order);
+
+            // -- 4a. Synchronous status check via process token ---------------
+            // Verifies the payment immediately so the order moves to PROCESSING
+            // right away, without waiting for the asynchronous server webhook.
+            // Falls back to PENDING_PAYMENT + webhook if the API is temporarily
+            // unavailable or returns an indeterminate status.
+            if ($processId !== '') {
+                $storeId       = (int)$order->getStoreId();
+                $processResult = $this->paythorAdapter->getProcessStatus($processId, $storeId);
+
+                if ($processResult['is_approved']) {
+                    $this->paymentStateManager->markPaid($order, $processResult['transaction_id']);
+
+                    $this->logger->info('Paythor Confirm: payment approved via getProcessStatus', [
+                        'order_id'       => $order->getIncrementId(),
+                        'transaction_id' => $processResult['transaction_id'],
+                    ]);
+                } elseif ($processResult['is_failed']) {
+                    $this->logger->info('Paythor Confirm: getProcessStatus reports failed, awaiting webhook', [
+                        'order_id' => $order->getIncrementId(),
+                        'status'   => $processResult['status'],
+                    ]);
+                    $order->addCommentToStatusHistory(
+                        __('Paythor: browser callback received but status is indeterminate (%1). Awaiting server webhook.', $processResult['status'])
+                    );
+                    $this->orderRepository->save($order);
+                } else {
+                    $order->addCommentToStatusHistory(
+                        __('Paythor: browser callback received, status pending (%1). Awaiting server webhook.', $processResult['status'])
+                    );
+                    $this->orderRepository->save($order);
+                }
+            } else {
+                $order->addCommentToStatusHistory(__('Paythor payment confirmed by browser. Awaiting server webhook.'));
+                $this->orderRepository->save($order);
+            }
 
             // -- 5. Clear pending ID + set checkout session -------------------
             $this->checkoutSession->unsPaythorPendingQuoteId();
@@ -123,8 +166,9 @@ class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
                 ->setLastOrderStatus($order->getStatus());
 
             $this->logger->info('Paythor Confirm: order created', [
-                'quote_id'  => $pendingQuoteId,
-                'order_id'  => $order->getIncrementId(),
+                'quote_id'   => $pendingQuoteId,
+                'order_id'   => $order->getIncrementId(),
+                'process_id' => $processId ?: 'none',
             ]);
 
             return $result->setData([

@@ -198,9 +198,10 @@ define([
 
         /**
          * Called after Paythor confirms payment via postMessage.
-         * Sends the quote reference to Confirm.php which creates the Magento order.
+         * Sends the quote reference (and optional processID) to Confirm.php
+         * which creates the Magento order and verifies payment status.
          */
-        _sendConfirmRequest: function (reference) {
+        _sendConfirmRequest: function (reference, processId) {
             var self = this;
 
             $.ajax({
@@ -208,8 +209,9 @@ define([
                 type:       'POST',
                 dataType:   'json',
                 data: {
-                    form_key:  $.mage.cookies.get('form_key') || window.checkoutConfig.formKey,
-                    reference: reference
+                    form_key:   $.mage.cookies.get('form_key') || window.checkoutConfig.formKey,
+                    reference:  reference,
+                    process_id: processId || ''
                 },
                 showLoader: false,
                 cache:      false,
@@ -300,11 +302,9 @@ define([
                     if (self.modalInstance) {
                         try { self.modalInstance.closeModal(); } catch (e) { /* noop */ }
                     }
-                    // Use the quote_id stored when Create.php responded, not the processID,
-                    // because Confirm.php validates against the session quote_id.
                     if (self.pendingQuoteId) {
                         fullScreenLoader.startLoader();
-                        self._sendConfirmRequest(self.pendingQuoteId);
+                        self._sendConfirmRequest(self.pendingQuoteId, data.processID);
                     }
                     return;
                 }
