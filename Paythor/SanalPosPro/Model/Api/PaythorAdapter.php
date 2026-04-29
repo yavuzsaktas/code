@@ -366,7 +366,8 @@ class PaythorAdapter
 
         // --- Invoice ---
         $invoice = new Invoice();
-        $invoice->setId((string)$quote->getId());
+        $orderRef = (string)($quote->getReservedOrderId() ?: $quote->getId());
+        $invoice->setId($orderRef);
         $invoice->setFirstName($firstName);
         $invoice->setLastName($lastName);
         $invoice->setPrice(number_format((float)$quote->getGrandTotal(), 2, '.', ''));
@@ -386,7 +387,7 @@ class PaythorAdapter
         $create->setAmount($amount);
         $create->setCurrency($currency);
         $create->setMethod('creditcard');
-        $create->setMerchantReference((string)$quote->getId());
+        $create->setMerchantReference($orderRef);
         $create->setReturnUrl($callbackUrl);
 
         if ($this->config->isDebugEnabled($storeId)) {
