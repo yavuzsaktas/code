@@ -127,4 +127,62 @@ class PaymentStateManager
             'reason' => $reason,
         ]);
     }
+
+    /**
+     * Records a refund notification from Paythor (E İade Edildi).
+     *
+     * Adds a visible comment and moves the order to CLOSED state when possible.
+     * Full credit-memo creation is left to the merchant via Magento admin
+     * to avoid unintended side-effects on inventory and accounting.
+     */
+    public function markRefunded(Order $order, string $transactionId, string $reason = ''): void
+    {
+        if (in_array($order->getState(), [Order::STATE_CLOSED], true)) {
+            $this->logger->info('Paythor PaymentStateManager: order already closed, markRefunded skipped', [
+                'order' => $order->getIncrementId(),
+            ]);
+            return;
+        }
+
+        $comment = $transactionId !== ''
+            ? __('Paythor: payment refunded (E İade Edildi). Transaction ID: %1', $transactionId)
+            : __('Paythor: payment refunded (E İade Edildi).');
+
+        if ($reason !== '') {
+            $comment = $comment . ' ' . $reason;
+        }
+
+        $order->addCommentToStatusHistory($comment, false, true);
+
+        if (in_array($order->getState(), [Order::STATE_PROCESSING, Order::STATE_COMPLETE], true)) {
+            $order->setState(Order::STATE_CLOSED)
+                  ->setStatus($order->getConfig()->getStateDefaultStatus(Order::STATE_CLOSED));
+        }
+
+        $this->orderRepository->save($order);
+
+        $this->logger->info('Paythor PaymentStateManager: order marked as refunded', [
+            'order'          => $order->getIncrementId(),
+            'transaction_id' => $transactionId,
+        ]);
+    }
+
+    /**
+     * Records a pending status update from Paythor (Başlatıldı / İşleniyor / 3D Güvenli).
+     *
+     * Adds a comment so the merchant can see Paythor's intermediate status
+     * without changing the Magento order state.
+     */
+    public function markPending(Order $order, string $paythorStatus): void
+    {
+        $order->addCommentToStatusHistory(
+            __('Paythor: payment status updated — %1', $paythorStatus)
+        );
+        $this->orderRepository->save($order);
+
+        $this->logger->info('Paythor PaymentStateManager: pending status recorded', [
+            'order'  => $order->getIncrementId(),
+            'status' => $paythorStatus,
+        ]);
+    }
 }

@@ -115,7 +115,8 @@ class Notify implements HttpPostActionInterface, CsrfAwareActionInterface
         // -- 4. Idempotency guard --------------------------------------------
         // The browser callback may have already finalised the order via getByToken.
         // Returning 200 here tells Paythor not to retry.
-        if (in_array($order->getState(), [Order::STATE_PROCESSING, Order::STATE_COMPLETE], true)) {
+        // CLOSED state covers refunded orders.
+        if (in_array($order->getState(), [Order::STATE_PROCESSING, Order::STATE_COMPLETE, Order::STATE_CLOSED], true)) {
             return $result->setData([
                 'success' => true,
                 'message' => 'Order already finalized.',
@@ -123,32 +124,50 @@ class Notify implements HttpPostActionInterface, CsrfAwareActionInterface
         }
 
         // -- 5. State machine -------------------------------------------------
+        // Normalise to UTF-8 lowercase to match Turkish status strings correctly.
+        $normalizedStatus = mb_strtolower(trim($eventStatus), 'UTF-8');
+
         try {
-            switch (strtolower($eventStatus)) {
-                case 'success':
-                case 'paid':
-                case 'authorized':
-                case 'captured':
-                    $this->paymentStateManager->markPaid($order, $transactionId);
-                    break;
+            if ($this->paythorAdapter->isApprovedStatus($normalizedStatus)) {
+                if ($normalizedStatus === 'authorized') {
+                    // Authorization only — we must capture to settle the funds.
+                    $processToken = (string)($order->getPayment()
+                        ->getAdditionalInformation('paythor_process_token') ?? '');
 
-                case 'failed':
-                case 'failure':
-                case 'declined':
-                case 'cancelled':
-                case 'canceled':
-                    $this->paymentStateManager->markFailed(
-                        $order,
-                        (string)($payload['message'] ?? 'Payment declined by gateway.')
+                    $this->paythorAdapter->capturePayment(
+                        $processToken,
+                        (float)$order->getGrandTotal(),
+                        (string)$order->getOrderCurrencyCode(),
+                        (int)$order->getStoreId()
                     );
-                    break;
+                }
 
-                default:
-                    $order->addCommentToStatusHistory(
-                        __('Paythor webhook received unknown status: %1', $eventStatus)
-                    );
-                    $this->orderRepository->save($order);
-                    break;
+                $this->paymentStateManager->markPaid($order, $transactionId);
+
+            } elseif ($this->paythorAdapter->isFailedStatus($normalizedStatus)) {
+                // Başarısız / E Reddedildi / İptal Edildi / declined / cancelled …
+                $this->paymentStateManager->markFailed(
+                    $order,
+                    (string)($payload['message'] ?? $eventStatus)
+                );
+
+            } elseif ($this->paythorAdapter->isRefundedStatus($normalizedStatus)) {
+                // E İade Edildi / refunded
+                $this->paymentStateManager->markRefunded(
+                    $order,
+                    $transactionId,
+                    (string)($payload['message'] ?? '')
+                );
+
+            } elseif ($this->paythorAdapter->isPendingStatus($normalizedStatus)) {
+                // Başlatıldı / İşleniyor / 3D Güvenli / Planlandı — no state change yet
+                $this->paymentStateManager->markPending($order, $eventStatus);
+
+            } else {
+                $order->addCommentToStatusHistory(
+                    __('Paythor webhook received unrecognised status: %1', $eventStatus)
+                );
+                $this->orderRepository->save($order);
             }
         } catch (\Throwable $e) {
             $this->logger->error('Paythor webhook processing error', [

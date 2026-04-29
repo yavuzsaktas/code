@@ -445,6 +445,54 @@ class PaythorAdapter
     }
 
     /**
+     * Notifies Paythor that the payment should be captured/settled.
+     * Must be called after the payment is verified as approved so Paythor's
+     * dashboard reflects the correct captured status and captured amount.
+     *
+     * Never throws: capture failure is non-fatal for the Magento order flow.
+     * The order still moves to PROCESSING; only the Paythor dashboard status
+     * will remain as "Başlatıldı" if this call fails.
+     *
+     * @return bool true when Paythor acknowledged the capture
+     */
+    public function capturePayment(string $processToken, float $amount, string $currency, int $storeId = 0): bool
+    {
+        if ($processToken === '') {
+            return false;
+        }
+
+        try {
+            $client = $this->getClient($storeId);
+
+            $response = $client->request('POST', "payment/capture/{$processToken}", [
+                'capture' => [
+                    'amount'   => (int)round($amount * 100),
+                    'currency' => $currency,
+                ],
+            ]);
+
+            $decoded = $client->decodeResponse($response);
+
+            if ($this->config->isDebugEnabled($storeId)) {
+                $this->logger->info('Paythor capturePayment result', [
+                    'token'    => substr($processToken, 0, 16) . '...',
+                    'amount'   => $amount,
+                    'currency' => $currency,
+                    'status'   => $decoded['status'] ?? 'unknown',
+                ]);
+            }
+
+            return in_array(strtolower((string)($decoded['status'] ?? '')), ['success', 'captured', 'ok'], true);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Paythor capturePayment failed (non-fatal)', [
+                'token'   => substr($processToken, 0, 16) . '...',
+                'message' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
      * Queries the Paythor process endpoint for the real-time status of a
      * payment process token (the p_id received in the browser callback URL).
      *
@@ -480,11 +528,12 @@ class PaythorAdapter
 
         // The API may nest status inside 'data' or return it at the root level.
         $data          = $response['data'] ?? $response;
-        $rawStatus     = strtolower(trim((string)($data['status'] ?? $response['status'] ?? '')));
+        $rawStatus     = mb_strtolower(trim((string)($data['status'] ?? $response['status'] ?? '')), 'UTF-8');
         $transactionId = (string)($data['transaction_id'] ?? $data['id'] ?? $response['transaction_id'] ?? '');
 
-        $isApproved = in_array($rawStatus, ['success', 'paid', 'authorized', 'captured', 'approved'], true);
-        $isFailed   = in_array($rawStatus, ['failed', 'failure', 'declined', 'cancelled', 'canceled'], true);
+        $isApproved = $this->isApprovedStatus($rawStatus);
+        $isFailed   = $this->isFailedStatus($rawStatus);
+        $isRefunded = $this->isRefundedStatus($rawStatus);
 
         if ($this->config->isDebugEnabled($storeId)) {
             $this->logger->info('Paythor getProcessStatus result', [
@@ -492,6 +541,7 @@ class PaythorAdapter
                 'status'         => $rawStatus,
                 'is_approved'    => $isApproved,
                 'is_failed'      => $isFailed,
+                'is_refunded'    => $isRefunded,
                 'transaction_id' => $transactionId,
             ]);
         }
@@ -499,6 +549,7 @@ class PaythorAdapter
         return [
             'is_approved'    => $isApproved,
             'is_failed'      => $isFailed,
+            'is_refunded'    => $isRefunded,
             'status'         => $rawStatus,
             'transaction_id' => $transactionId,
             'raw'            => $response,
@@ -674,5 +725,71 @@ class PaythorAdapter
             }
         }
         return [];
+    }
+
+    /**
+     * Paythor status → approved (Tamamlandı / Captured).
+     *
+     * Covers both English API codes and Turkish display values returned
+     * by some Paythor environments.
+     */
+    public function isApprovedStatus(string $status): bool
+    {
+        return in_array($status, [
+            // English
+            'success', 'paid', 'authorized', 'captured', 'approved', 'completed', 'active',
+            // Turkish (unicode-safe lowercase via mb_strtolower)
+            'tamamlandı', 'tamamlandi',
+        ], true);
+    }
+
+    /**
+     * Paythor status → failed / cancelled (Başarısız / E Reddedildi / İptal Edildi).
+     */
+    public function isFailedStatus(string $status): bool
+    {
+        return in_array($status, [
+            // English
+            'failed', 'failure', 'declined', 'cancelled', 'canceled', 'rejected', 'voided',
+            'e_declined', 'e-declined',
+            // Turkish
+            'başarısız', 'basarisiz',
+            'e reddedildi', 'e_reddedildi', 'e-reddedildi', 'reddedildi',
+            'iptal edildi', 'i̇ptal edildi', 'iptal_edildi',
+        ], true);
+    }
+
+    /**
+     * Paythor status → refunded (E İade Edildi).
+     */
+    public function isRefundedStatus(string $status): bool
+    {
+        return in_array($status, [
+            // English
+            'refunded', 'reversed', 'e_refunded', 'e-refunded',
+            // Turkish
+            'e iade edildi', 'e_iade_edildi', 'iade edildi', 'iade_edildi',
+        ], true);
+    }
+
+    /**
+     * Paythor status → pending (no state change needed yet).
+     *
+     * Başlatıldı / İşleniyor / 3D Güvenli / Planlandı
+     */
+    public function isPendingStatus(string $status): bool
+    {
+        return in_array($status, [
+            // English
+            'initiated', 'started', 'created', 'new', 'pending',
+            'processing', 'in_progress',
+            '3d_secure', '3dsecure', '3d secure', '3d_pending',
+            'planned', 'scheduled',
+            // Turkish
+            'başlatıldı', 'baslatildi',
+            'i̇şleniyor', 'isleniyor', 'işleniyor',
+            '3d güvenli', '3d_güvenli',
+            'planlandı', 'planlandi',
+        ], true);
     }
 }

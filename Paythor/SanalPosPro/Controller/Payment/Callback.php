@@ -180,6 +180,13 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
 
             // -- 3a. Payment approved → create invoice, move to PROCESSING --
             if ($processResult['is_approved']) {
+                $this->paythorAdapter->capturePayment(
+                    $processToken,
+                    (float)$order->getGrandTotal(),
+                    (string)$order->getOrderCurrencyCode(),
+                    $storeId
+                );
+
                 $this->paymentStateManager->markPaid($order, $processResult['transaction_id']);
 
                 $this->logger->info('Paythor Callback: payment approved via getByToken', [
@@ -190,7 +197,13 @@ class Callback implements HttpGetActionInterface, CsrfAwareActionInterface
                 return $redirect->setPath('checkout/onepage/success');
             }
 
-            // -- 3b. Payment definitively declined → cancel order, back to cart --
+            // -- 3b. Payment refunded (rare at this stage, handle gracefully) --
+            if ($processResult['is_refunded'] ?? false) {
+                $this->paymentStateManager->markRefunded($order, $processResult['transaction_id']);
+                return $redirect->setPath('checkout/onepage/success');
+            }
+
+            // -- 3c. Payment definitively declined → cancel order, back to cart --
             if ($processResult['is_failed']) {
                 $reason = (string)($processResult['raw']['data']['message']
                     ?? $processResult['raw']['message']

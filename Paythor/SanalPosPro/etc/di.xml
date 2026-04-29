@@ -94,4 +94,19 @@
         </arguments>
     </type>
 
+    <type name="Paythor\SanalPosPro\Console\Command\CaptureInitiatedPayments">
+        <arguments>
+            <argument name="logger" xsi:type="object">PaythorSanalPosProLogger</argument>
+        </arguments>
+    </type>
+
+    <!-- Register console commands -->
+    <type name="Magento\Framework\Console\CommandList">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="paythor_capture_initiated" xsi:type="object">Paythor\SanalPosPro\Console\Command\CaptureInitiatedPayments</item>
+            </argument>
+        </arguments>
+    </type>
+
 </config>

@@ -129,6 +129,13 @@ class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
                 $processResult = $this->paythorAdapter->getProcessStatus($processId, $storeId);
 
                 if ($processResult['is_approved']) {
+                    $this->paythorAdapter->capturePayment(
+                        $processId,
+                        (float)$order->getGrandTotal(),
+                        (string)$order->getOrderCurrencyCode(),
+                        $storeId
+                    );
+
                     $this->paymentStateManager->markPaid($order, $processResult['transaction_id']);
 
                     $this->logger->info('Paythor Confirm: payment approved via getProcessStatus', [
@@ -136,14 +143,14 @@ class Confirm implements HttpPostActionInterface, CsrfAwareActionInterface
                         'transaction_id' => $processResult['transaction_id'],
                     ]);
                 } elseif ($processResult['is_failed']) {
-                    $this->logger->info('Paythor Confirm: getProcessStatus reports failed, awaiting webhook', [
-                        'order_id' => $order->getIncrementId(),
-                        'status'   => $processResult['status'],
-                    ]);
-                    $order->addCommentToStatusHistory(
-                        __('Paythor: browser callback received but status is indeterminate (%1). Awaiting server webhook.', $processResult['status'])
+                    $this->paymentStateManager->markFailed(
+                        $order,
+                        (string)($processResult['raw']['data']['message'] ?? $processResult['status'])
                     );
-                    $this->orderRepository->save($order);
+                } elseif ($processResult['is_refunded'] ?? false) {
+                    $this->paymentStateManager->markRefunded($order, $processResult['transaction_id']);
+                } elseif ($this->paythorAdapter->isPendingStatus($processResult['status'])) {
+                    $this->paymentStateManager->markPending($order, $processResult['status']);
                 } else {
                     $order->addCommentToStatusHistory(
                         __('Paythor: browser callback received, status pending (%1). Awaiting server webhook.', $processResult['status'])

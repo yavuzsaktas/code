@@ -25,12 +25,6 @@ class Index extends Action
         $page = $this->pageFactory->create();
         $page->getConfig()->getTitle()->prepend(__('Paythor – Connect Your Account'));
 
-        if ($this->paymentConfig->isConnected()) {
-            $this->messageManager->addSuccessMessage(
-                __('Paythor is connected. Public Key: %1...', substr($this->paymentConfig->getPublicKey(), 0, 20))
-            );
-        }
-
         return $page;
     }
 }
