@@ -90,9 +90,6 @@ class Create implements HttpPostActionInterface, CsrfAwareActionInterface
 
             // -- 4. Stamp payment method on the quote (no order yet) ----------
             $quote->getPayment()->setMethod(PaymentConfig::METHOD_CODE);
-            if (!$quote->getReservedOrderId()) {
-                $quote->reserveOrderId();
-            }
             $quote->collectTotals();
             $this->cartRepository->save($quote);
 
